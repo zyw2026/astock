@@ -102,6 +102,10 @@ def _rank_selection_candidates(
                         "next_1d_return": float(row["next_1d_return"]) if row["next_1d_return"] is not None else None,
                         "next_2d_return": float(row["next_2d_return"]) if row["next_2d_return"] is not None else None,
                         "next_3d_return": float(row["next_3d_return"]) if row["next_3d_return"] is not None else None,
+                        "next_1d_max_return": float(row["next_1d_max_return"]) if row["next_1d_max_return"] is not None else None,
+                        "next_2d_max_return": float(row["next_2d_max_return"]) if row["next_2d_max_return"] is not None else None,
+                        "max_drawdown_1d": float(row["max_drawdown_1d"]) if row["max_drawdown_1d"] is not None else None,
+                        "max_drawdown_2d": float(row["max_drawdown_2d"]) if row["max_drawdown_2d"] is not None else None,
                         "next_3d_max_return": float(row["next_3d_max_return"]) if row["next_3d_max_return"] is not None else None,
                         "max_drawdown_3d": float(row["max_drawdown_3d"]) if row["max_drawdown_3d"] is not None else None,
                     }

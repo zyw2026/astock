@@ -30,6 +30,14 @@ def enrich_feature_frame(frame: pl.DataFrame) -> pl.DataFrame:
             [
                 pl.col("ret_1d").shift(1).over("symbol").alias("prev_ret_1d"),
                 (((pl.col("recent_3d_high") - pl.col("close")) / pl.col("recent_3d_high")) * 100).alias("pullback_from_3d_high_pct"),
+                pl.col("high").shift(-1).over("symbol").alias("future_high_1d"),
+                pl.col("low").shift(-1).over("symbol").alias("future_low_1d"),
+                pl.max_horizontal(
+                    [pl.col("high").shift(-i).over("symbol") for i in range(1, 3)]
+                ).alias("future_max_high_2d"),
+                pl.min_horizontal(
+                    [pl.col("low").shift(-i).over("symbol") for i in range(1, 3)]
+                ).alias("future_min_low_2d"),
                 pl.min_horizontal(
                     [pl.col("low").shift(-i).over("symbol") for i in range(1, 4)]
                 ).alias("future_min_low_3d"),
@@ -50,6 +58,10 @@ def enrich_feature_frame(frame: pl.DataFrame) -> pl.DataFrame:
                 (((pl.col("future_close_1d") / pl.col("close")) - 1) * 100).alias("next_1d_return"),
                 (((pl.col("future_close_2d") / pl.col("close")) - 1) * 100).alias("next_2d_return"),
                 (((pl.col("future_close_3d") / pl.col("close")) - 1) * 100).alias("next_3d_return"),
+                (((pl.col("future_high_1d") / pl.col("close")) - 1) * 100).alias("next_1d_max_return"),
+                (((pl.col("future_max_high_2d") / pl.col("close")) - 1) * 100).alias("next_2d_max_return"),
+                (((pl.col("future_low_1d") / pl.col("close")) - 1) * 100).alias("max_drawdown_1d"),
+                (((pl.col("future_min_low_2d") / pl.col("close")) - 1) * 100).alias("max_drawdown_2d"),
                 (((pl.col("future_max_high_3d") / pl.col("close")) - 1) * 100).alias("next_3d_max_return"),
                 (((pl.col("future_min_low_3d") / pl.col("close")) - 1) * 100).alias("max_drawdown_3d"),
                 (((pl.col("future_close_5d") / pl.col("close")) - 1) * 100).alias("next_5d_return"),
@@ -70,6 +82,10 @@ def _base_output(frame: pl.DataFrame, reason: str, score_expr: pl.Expr) -> pl.Da
             "next_1d_return",
             "next_2d_return",
             "next_3d_return",
+            "next_1d_max_return",
+            "next_2d_max_return",
+            "max_drawdown_1d",
+            "max_drawdown_2d",
             "next_3d_max_return",
             "next_5d_return",
             "max_drawdown_3d",

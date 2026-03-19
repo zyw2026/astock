@@ -185,10 +185,14 @@ def replay_selection(
     table.add_column("logic_id")
     table.add_column("score", justify="right")
     table.add_column("n1d", justify="right")
+    table.add_column("n1d_max", justify="right")
+    table.add_column("n1d_dd", justify="right")
     table.add_column("n2d", justify="right")
+    table.add_column("n2d_max", justify="right")
+    table.add_column("n2d_dd", justify="right")
     table.add_column("n3d", justify="right")
-    table.add_column("max3d", justify="right")
-    table.add_column("dd3d", justify="right")
+    table.add_column("n3d_max", justify="right")
+    table.add_column("n3d_dd", justify="right")
     for row in result["rows"]:
         table.add_row(
             str(row["selection_rank"]),
@@ -196,7 +200,11 @@ def replay_selection(
             row["logic_id"],
             f"{(row.get('trigger_score') or 0):.2f}",
             f"{(row.get('next_1d_return') or 0):.2f}",
+            f"{(row.get('next_1d_max_return') or 0):.2f}",
+            f"{(row.get('max_drawdown_1d') or 0):.2f}",
             f"{(row.get('next_2d_return') or 0):.2f}",
+            f"{(row.get('next_2d_max_return') or 0):.2f}",
+            f"{(row.get('max_drawdown_2d') or 0):.2f}",
             f"{(row.get('next_3d_return') or 0):.2f}",
             f"{(row.get('next_3d_max_return') or 0):.2f}",
             f"{(row.get('max_drawdown_3d') or 0):.2f}",
