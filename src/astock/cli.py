@@ -16,6 +16,10 @@ def _parse_date_arg(value: str | None) -> date | None:
     return date.fromisoformat(value) if value else None
 
 
+def _parse_date_list_arg(value: str) -> list[date]:
+    return [date.fromisoformat(item.strip()) for item in value.split(",") if item.strip()]
+
+
 @app.command()
 def info() -> None:
     """Show project intent and current phase."""
@@ -209,6 +213,134 @@ def replay_selection(
             f"{(row.get('next_3d_max_return') or 0):.2f}",
             f"{(row.get('max_drawdown_3d') or 0):.2f}",
         )
+    console.print(table)
+
+
+@app.command("replay-batch")
+def replay_batch(
+    trade_dates: str,
+    symbol_limit: int = settings.default_symbol_limit,
+    chunk_size: int = settings.default_chunk_size,
+    selection_limit: int = settings.default_selection_limit,
+    approved_only: bool = True,
+) -> None:
+    """Replay multiple historical trade dates and aggregate strategy quality."""
+    from astock.selection.service import replay_historical_selection_batch
+
+    result = replay_historical_selection_batch(
+        trade_dates=_parse_date_list_arg(trade_dates),
+        symbol_limit=symbol_limit,
+        chunk_size=chunk_size,
+        selection_limit=selection_limit,
+        approved_only=approved_only,
+    )
+    console.print(f"trade_dates: {', '.join(result['trade_dates'])}")
+    day_table = Table(title="Replay Days")
+    day_table.add_column("trade_date")
+    day_table.add_column("regime")
+    day_table.add_column("count", justify="right")
+    day_table.add_column("warning")
+    for row in result["day_results"]:
+        day_table.add_row(
+            row["trade_date"],
+            row.get("regime") or "",
+            str(row.get("selection_count") or 0),
+            row.get("warning") or "",
+        )
+    console.print(day_table)
+
+    if not result["strategy_stats"]:
+        console.print("no replay rows found")
+        raise typer.Exit(code=1)
+
+    table = Table(title="Replay Strategy Quality")
+    table.add_column("logic_id")
+    table.add_column("logic_name")
+    table.add_column("samples", justify="right")
+    table.add_column("hit_1d", justify="right")
+    table.add_column("hit_2d", justify="right")
+    table.add_column("hit_3d", justify="right")
+    table.add_column("big_3d", justify="right")
+    table.add_column("avg_n1d", justify="right")
+    table.add_column("avg_n2d", justify="right")
+    table.add_column("avg_n3d", justify="right")
+    table.add_column("avg_n3d_max", justify="right")
+    table.add_column("avg_n3d_dd", justify="right")
+    for row in result["strategy_stats"]:
+        table.add_row(
+            row["logic_id"],
+            row.get("logic_name") or "",
+            str(row["sample_count"]),
+            f"{row['hit_rate_1d']:.2%}",
+            f"{row['hit_rate_2d']:.2%}",
+            f"{row['hit_rate_3d']:.2%}",
+            f"{row['big_move_rate_3d']:.2%}",
+            f"{row['avg_n1d']:.2f}",
+            f"{row['avg_n2d']:.2f}",
+            f"{row['avg_n3d']:.2f}",
+            f"{row['avg_n3d_max']:.2f}",
+            f"{row['avg_n3d_dd']:.2f}",
+        )
+    console.print(table)
+
+
+@app.command("strategy-sample")
+def strategy_sample(
+    logic_id: str,
+    min_samples: int = 10,
+    lookback_trade_days: int = 40,
+    end_date: str | None = None,
+    symbol_limit: int = settings.default_symbol_limit,
+    chunk_size: int = settings.default_chunk_size,
+    selection_limit: int = settings.default_selection_limit,
+    approved_only: bool = True,
+) -> None:
+    """Expand signal days for one strategy and report whether sample size is usable."""
+    from astock.selection.service import analyze_strategy_with_expanded_signals
+
+    result = analyze_strategy_with_expanded_signals(
+        logic_id=logic_id,
+        min_samples=min_samples,
+        lookback_trade_days=lookback_trade_days,
+        end_date=_parse_date_arg(end_date),
+        symbol_limit=symbol_limit,
+        chunk_size=chunk_size,
+        selection_limit=selection_limit,
+        approved_only=approved_only,
+    )
+    console.print(f"logic_id: {result['logic_id']}")
+    console.print(f"sample_count: {result['sample_count']}")
+    console.print(f"meets_min_samples: {result['meets_min_samples']}")
+    console.print(f"matched_trade_dates: {', '.join(result['matched_trade_dates']) if result['matched_trade_dates'] else 'none'}")
+    stats = result.get("strategy_stats")
+    if not stats:
+        console.print("no matched rows found")
+        raise typer.Exit(code=1)
+    table = Table(title="Expanded Strategy Sample")
+    table.add_column("logic_name")
+    table.add_column("samples", justify="right")
+    table.add_column("hit_1d", justify="right")
+    table.add_column("hit_2d", justify="right")
+    table.add_column("hit_3d", justify="right")
+    table.add_column("big_3d", justify="right")
+    table.add_column("avg_n1d", justify="right")
+    table.add_column("avg_n2d", justify="right")
+    table.add_column("avg_n3d", justify="right")
+    table.add_column("avg_n3d_max", justify="right")
+    table.add_column("avg_n3d_dd", justify="right")
+    table.add_row(
+        stats.get("logic_name") or "",
+        str(stats["sample_count"]),
+        f"{stats['hit_rate_1d']:.2%}",
+        f"{stats['hit_rate_2d']:.2%}",
+        f"{stats['hit_rate_3d']:.2%}",
+        f"{stats['big_move_rate_3d']:.2%}",
+        f"{stats['avg_n1d']:.2f}",
+        f"{stats['avg_n2d']:.2f}",
+        f"{stats['avg_n3d']:.2f}",
+        f"{stats['avg_n3d_max']:.2f}",
+        f"{stats['avg_n3d_dd']:.2f}",
+    )
     console.print(table)
 
 

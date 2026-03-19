@@ -18,6 +18,7 @@ from astock.validation.service import (
     derive_feature_regime_map,
     fetch_active_symbols,
     fetch_market_regime_map,
+    fetch_trade_dates,
 )
 
 
@@ -291,4 +292,235 @@ def replay_historical_selection(
         "selection_count": len(rows),
         "approved_only": approved_only,
         "rows": rows,
+    }
+
+
+def replay_historical_selection_batch(
+    *,
+    trade_dates: list[date],
+    symbol_limit: int | None = None,
+    chunk_size: int | None = None,
+    selection_limit: int | None = None,
+    approved_only: bool = True,
+) -> dict:
+    if not trade_dates:
+        return {"trade_dates": [], "day_results": [], "strategy_stats": [], "rows": []}
+
+    client = AksMcpRestClient()
+    storage = DuckDbStorage()
+    storage.initialize()
+    sorted_trade_dates = sorted(trade_dates)
+    symbols = fetch_active_symbols(client, symbol_limit=symbol_limit or settings.default_symbol_limit)
+    frame = build_feature_frame(
+        client,
+        symbols=symbols,
+        start_date=sorted_trade_dates[0] - timedelta(days=40),
+        end_date=sorted_trade_dates[-1] + timedelta(days=10),
+        chunk_size=chunk_size or settings.default_chunk_size,
+    )
+    if frame.is_empty():
+        return {
+            "trade_dates": [item.isoformat() for item in sorted_trade_dates],
+            "day_results": [],
+            "strategy_stats": [],
+            "rows": [],
+        }
+
+    regime_map = fetch_market_regime_map(client, start_date=sorted_trade_dates[0], end_date=sorted_trade_dates[-1])
+    candidate_frame = frame.filter(pl.col("trade_date").is_in(sorted_trade_dates))
+    fallback_regime_map = derive_feature_regime_map(candidate_frame, trade_dates=sorted_trade_dates)
+    for trade_date, regime in fallback_regime_map.items():
+        regime_map.setdefault(trade_date, regime)
+
+    registry = build_default_registry()
+    approved_cache: dict[str, dict[str, float]] = {}
+    batch_rows: list[dict] = []
+    day_results: list[dict] = []
+    for trade_date in sorted_trade_dates:
+        trade_frame = frame.filter(pl.col("trade_date") == trade_date)
+        if trade_frame.is_empty():
+            day_results.append(
+                {
+                    "trade_date": trade_date.isoformat(),
+                    "regime": None,
+                    "selection_count": 0,
+                    "warning": "no feature data for trade date",
+                }
+            )
+            continue
+
+        regime = regime_map.get(trade_date, "rotation")
+        regime_evidence = _resolve_historical_regime(client, trade_date=trade_date, trade_frame=trade_frame)[1]
+        allowed_logic_ids = {logic.logic_id for logic in active_logics_for_regime(regime)}
+        if regime not in approved_cache:
+            approved_cache[regime] = {
+                row["logic_id"]: float(row["reliability_score"])
+                for row in storage.load_latest_reliability_snapshot(regime=regime, approved_only=approved_only)
+                if row["logic_id"] in allowed_logic_ids
+            }
+            if not approved_only:
+                for logic_id in allowed_logic_ids:
+                    approved_cache[regime].setdefault(logic_id, 0.0)
+        approved_score_map = {logic_id: score for logic_id, score in approved_cache[regime].items() if logic_id in allowed_logic_ids}
+        if approved_only and not approved_score_map:
+            day_results.append(
+                {
+                    "trade_date": trade_date.isoformat(),
+                    "regime": regime,
+                    "selection_count": 0,
+                    "warning": "no approved logic for historical regime; run validation first",
+                }
+            )
+            continue
+
+        rows = _rank_selection_candidates(
+            trade_frame=trade_frame,
+            regime=regime,
+            registry=registry,
+            approved_score_map=approved_score_map,
+            selection_limit=selection_limit or settings.default_selection_limit,
+            include_forward_metrics=True,
+        )
+        day_results.append(
+            {
+                "trade_date": trade_date.isoformat(),
+                "regime": regime,
+                "selection_count": len(rows),
+                "warning": None,
+                "regime_evidence": regime_evidence,
+            }
+        )
+        for row in rows:
+            enriched = dict(row)
+            enriched["trade_date"] = trade_date.isoformat()
+            batch_rows.append(enriched)
+
+    grouped: dict[str, list[dict]] = {}
+    for row in batch_rows:
+        grouped.setdefault(row["logic_id"], []).append(row)
+
+    strategy_stats: list[dict] = []
+    for logic_id, rows in grouped.items():
+        sample_count = len(rows)
+        hit_1d = sum(1 for row in rows if (row.get("next_1d_return") or 0.0) > 0)
+        hit_2d = sum(1 for row in rows if (row.get("next_2d_return") or 0.0) > 0)
+        hit_3d = sum(1 for row in rows if (row.get("next_3d_return") or 0.0) > 0)
+        big_move_3d = sum(1 for row in rows if (row.get("next_3d_max_return") or 0.0) >= 5.0)
+        strategy_stats.append(
+            {
+                "logic_id": logic_id,
+                "logic_name": rows[0].get("logic_name"),
+                "sample_count": sample_count,
+                "hit_rate_1d": hit_1d / sample_count,
+                "hit_rate_2d": hit_2d / sample_count,
+                "hit_rate_3d": hit_3d / sample_count,
+                "big_move_rate_3d": big_move_3d / sample_count,
+                "avg_n1d": sum((row.get("next_1d_return") or 0.0) for row in rows) / sample_count,
+                "avg_n2d": sum((row.get("next_2d_return") or 0.0) for row in rows) / sample_count,
+                "avg_n3d": sum((row.get("next_3d_return") or 0.0) for row in rows) / sample_count,
+                "avg_n3d_max": sum((row.get("next_3d_max_return") or 0.0) for row in rows) / sample_count,
+                "avg_n3d_dd": sum((row.get("max_drawdown_3d") or 0.0) for row in rows) / sample_count,
+                "avg_trigger_score": sum((row.get("trigger_score") or 0.0) for row in rows) / sample_count,
+                "avg_reliability_score": sum((row.get("reliability_score") or 0.0) for row in rows) / sample_count,
+            }
+        )
+
+    strategy_stats.sort(
+        key=lambda item: (
+            item["hit_rate_3d"],
+            item["big_move_rate_3d"],
+            item["avg_n3d_max"],
+            item["avg_n3d"],
+        ),
+        reverse=True,
+    )
+    return {
+        "trade_dates": [item.isoformat() for item in trade_dates],
+        "day_results": day_results,
+        "strategy_stats": strategy_stats,
+        "rows": batch_rows,
+    }
+
+
+def analyze_strategy_with_expanded_signals(
+    *,
+    logic_id: str,
+    min_samples: int = 10,
+    lookback_trade_days: int = 40,
+    end_date: date | None = None,
+    symbol_limit: int | None = None,
+    chunk_size: int | None = None,
+    selection_limit: int | None = None,
+    approved_only: bool = True,
+) -> dict:
+    client = AksMcpRestClient()
+    resolved_end_date = end_date or date.today()
+    calendar_start = resolved_end_date - timedelta(days=max(lookback_trade_days * 2, 90))
+    trade_dates = fetch_trade_dates(client, start_date=calendar_start, end_date=resolved_end_date)
+    if len(trade_dates) > lookback_trade_days:
+        trade_dates = trade_dates[-lookback_trade_days:]
+
+    batch = replay_historical_selection_batch(
+        trade_dates=trade_dates,
+        symbol_limit=symbol_limit,
+        chunk_size=chunk_size,
+        selection_limit=selection_limit,
+        approved_only=approved_only,
+    )
+    target_rows = [row for row in batch["rows"] if row["logic_id"] == logic_id]
+    target_day_results: list[dict] = []
+    target_trade_dates: list[str] = []
+    for day in batch["day_results"]:
+        matched = [row for row in target_rows if row["trade_date"] == day["trade_date"]]
+        if matched:
+            target_day_results.append(
+                {
+                    "trade_date": day["trade_date"],
+                    "regime": day.get("regime"),
+                    "selection_count": len(matched),
+                    "warning": day.get("warning"),
+                }
+            )
+            target_trade_dates.append(day["trade_date"])
+
+    if not target_rows:
+        return {
+            "logic_id": logic_id,
+            "trade_dates_considered": [item.isoformat() for item in trade_dates],
+            "matched_trade_dates": [],
+            "sample_count": 0,
+            "meets_min_samples": False,
+            "strategy_stats": None,
+            "day_results": target_day_results,
+        }
+
+    sample_count = len(target_rows)
+    hit_1d = sum(1 for row in target_rows if (row.get("next_1d_return") or 0.0) > 0)
+    hit_2d = sum(1 for row in target_rows if (row.get("next_2d_return") or 0.0) > 0)
+    hit_3d = sum(1 for row in target_rows if (row.get("next_3d_return") or 0.0) > 0)
+    big_move_3d = sum(1 for row in target_rows if (row.get("next_3d_max_return") or 0.0) >= 5.0)
+    strategy_stats = {
+        "logic_id": logic_id,
+        "logic_name": target_rows[0].get("logic_name"),
+        "sample_count": sample_count,
+        "hit_rate_1d": hit_1d / sample_count,
+        "hit_rate_2d": hit_2d / sample_count,
+        "hit_rate_3d": hit_3d / sample_count,
+        "big_move_rate_3d": big_move_3d / sample_count,
+        "avg_n1d": sum((row.get("next_1d_return") or 0.0) for row in target_rows) / sample_count,
+        "avg_n2d": sum((row.get("next_2d_return") or 0.0) for row in target_rows) / sample_count,
+        "avg_n3d": sum((row.get("next_3d_return") or 0.0) for row in target_rows) / sample_count,
+        "avg_n3d_max": sum((row.get("next_3d_max_return") or 0.0) for row in target_rows) / sample_count,
+        "avg_n3d_dd": sum((row.get("max_drawdown_3d") or 0.0) for row in target_rows) / sample_count,
+        "avg_trigger_score": sum((row.get("trigger_score") or 0.0) for row in target_rows) / sample_count,
+        "avg_reliability_score": sum((row.get("reliability_score") or 0.0) for row in target_rows) / sample_count,
+    }
+    return {
+        "logic_id": logic_id,
+        "trade_dates_considered": [item.isoformat() for item in trade_dates],
+        "matched_trade_dates": target_trade_dates,
+        "sample_count": sample_count,
+        "meets_min_samples": sample_count >= min_samples,
+        "strategy_stats": strategy_stats,
+        "day_results": target_day_results,
     }
