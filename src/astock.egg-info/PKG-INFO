@@ -1,0 +1,73 @@
+Metadata-Version: 2.4
+Name: astock
+Version: 0.1.0
+Summary: Independent A-share stock logic research and selection engine consuming aks-mcp
+Author: astock
+Requires-Python: >=3.12
+Description-Content-Type: text/markdown
+Requires-Dist: httpx>=0.28.1
+Requires-Dist: pydantic>=2.10.3
+Requires-Dist: pydantic-settings>=2.6.1
+Requires-Dist: polars>=1.12.0
+Requires-Dist: duckdb>=1.1.3
+Requires-Dist: sqlalchemy>=2.0.35
+Requires-Dist: typer>=0.15.1
+Requires-Dist: rich>=13.9.4
+Requires-Dist: python-dateutil>=2.9.0.post0
+Provides-Extra: dev
+Requires-Dist: pytest>=8.3.4; extra == "dev"
+Requires-Dist: pytest-cov>=6.0.0; extra == "dev"
+Requires-Dist: ruff>=0.8.2; extra == "dev"
+
+# astock
+
+`astock` 是一个独立于 `aks-mcp` 的 A 股研究与选股项目。
+
+它不负责采集原始行情，也不修改 `aks-mcp`。它只做三件事：
+
+- 定义选股逻辑候选池
+- 用历史数据验证选股逻辑
+- 用可靠逻辑生成当日候选股
+
+## 边界
+
+- `aks-mcp`：数据服务，已部署系统，作为外部依赖消费
+- `astock`：研究、验证、逻辑调度、选股输出
+
+## 数据来源优先级
+
+1. `aks-mcp` REST API
+2. `aks-mcp` 数据库只读访问
+
+第一阶段默认只实现 REST 访问。
+
+## 目标架构
+
+- `connectors/`
+  - 对接 `aks-mcp` REST / DB
+- `logic_pool/`
+  - 选股逻辑定义与注册
+- `validation/`
+  - 逻辑回放、命中记录、绩效评估
+- `selection/`
+  - 用通过验证的逻辑做当日选股
+- `storage/`
+  - 持久化逻辑命中、验证结果、逻辑排行榜
+- `app/`
+  - 配置、编排、CLI 入口
+
+## 第一阶段只做什么
+
+- 建立独立项目骨架
+- 定义逻辑候选池模型
+- 定义验证结果数据模型
+- 定义与 `aks-mcp` 的接入边界
+- 为后续实现预留 CLI 命令
+
+## 后续路线
+
+1. 打通 `aks-mcp` REST connector
+2. 落地第一批逻辑候选池
+3. 跑历史验证
+4. 产出可靠逻辑榜单
+5. 基于可靠逻辑生成每日候选股

@@ -1,0 +1,2 @@
+[console_scripts]
+astock = astock.cli:app
