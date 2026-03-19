@@ -20,7 +20,8 @@
 - 消费已部署的 `aks-mcp` 数据服务
 - 管理本地选股逻辑候选池
 - 用短线低吸因子口径评估逻辑在不同市场状态下的表现
-- 输出带解释字段的每日候选股
+- 输出每日候选股，并通过 `show-selection` 查看解释字段
+- 支持指定历史交易日的策略回放与结果验证
 - 在本地保存逻辑命中、验证结果和选股结果
 
 ## 状态策略
@@ -66,6 +67,19 @@
 
 - `fund_flow_reversal`（资金反转低吸）
 
+## 当前实现说明
+
+- 当前验证体系是“短线低吸因子验证版”，重点看未来 `1-3` 天的命中率、爆发率、最大拉升和回撤
+- 历史市场状态优先使用 `market_fund_flow`，缺失时会使用特征面板做后备推断
+- 当前支持两类选股模式：
+  - `run-selection`：生成当日候选股
+  - `replay-selection`：回放指定历史交易日，并输出后续 `1/2/3` 天表现
+- `show-selection` 当前会展示：
+  - `logic_name`
+  - `holding_days`
+  - `reliability_score`
+  - `invalidation_level`
+
 ## 快速开始
 
 开始前需要：
@@ -103,8 +117,10 @@ astock validate-logics --start-date 2025-11-01 --end-date 2026-03-12 --symbol-li
 
 ### 4. 生成当日候选股
 
+示例日期请替换为最近交易日。
+
 ```bash
-astock run-selection --trade-date 2026-03-18 --symbol-limit 120 --chunk-size 20 --selection-limit 10
+astock run-selection --trade-date 2026-03-19 --symbol-limit 120 --chunk-size 20 --selection-limit 10
 ```
 
 ### 常用命令
@@ -127,6 +143,14 @@ astock list-logics
 astock show-market --top-n 3
 ```
 
+查看市场状态：
+
+```bash
+astock show-regime --trade-date 2026-03-19
+```
+
+命令输出中的 `regime` 和 `regime_evidence` 即当前市场状态及其判断依据。
+
 查看最新验证结果：
 
 ```bash
@@ -142,18 +166,14 @@ astock show-snapshot --regime weak_rotation
 查看当日候选股明细：
 
 ```bash
-astock show-selection --trade-date 2026-03-18
+astock show-selection --trade-date 2026-03-19
 ```
 
-## 当前实现说明
+回放历史交易日选股结果：
 
-- 当前验证体系是“短线低吸因子验证版”，重点看未来 `1-3` 天的命中率、爆发率、最大拉升和回撤
-- 历史市场状态优先使用 `market_fund_flow`，缺失时会使用特征面板做后备推断
-- `show-selection` 当前会展示：
-  - `logic_name`
-  - `holding_days`
-  - `reliability_score`
-  - `invalidation_level`
+```bash
+astock replay-selection 2026-03-16 --symbol-limit 120 --chunk-size 20 --selection-limit 10
+```
 
 ## 文档导航
 

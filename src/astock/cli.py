@@ -78,6 +78,17 @@ def show_market(top_n: int = 3) -> None:
     console.print(f"industry leaders: {len(row.get('industry_fund_flow_leaders', []))}")
 
 
+@app.command("show-regime")
+def show_regime(trade_date: str | None = None) -> None:
+    """Show current market regime and evidence."""
+    from astock.selection.service import detect_current_regime
+
+    result = detect_current_regime(trade_date=_parse_date_arg(trade_date))
+    console.print(f"trade_date: {result['trade_date']}")
+    console.print(f"regime: {result['regime']}")
+    console.print(f"regime_evidence: {result['regime_evidence']}")
+
+
 @app.command("validate-logics")
 def validate_logics(
     start_date: str | None = None,
@@ -140,6 +151,55 @@ def run_selection(
             row["logic_id"],
             f"{(row.get('trigger_score') or 0):.2f}",
             row.get("selection_reason") or "",
+        )
+    console.print(table)
+
+
+@app.command("replay-selection")
+def replay_selection(
+    trade_date: str,
+    symbol_limit: int = settings.default_symbol_limit,
+    chunk_size: int = settings.default_chunk_size,
+    selection_limit: int = settings.default_selection_limit,
+    approved_only: bool = True,
+) -> None:
+    """Replay a historical trading day using historical regime and forward 1-3d outcomes."""
+    from astock.selection.service import replay_historical_selection
+
+    result = replay_historical_selection(
+        trade_date=date.fromisoformat(trade_date),
+        symbol_limit=symbol_limit,
+        chunk_size=chunk_size,
+        selection_limit=selection_limit,
+        approved_only=approved_only,
+    )
+    console.print(f"trade_date: {result.get('trade_date')}")
+    console.print(f"regime: {result.get('regime')}")
+    console.print(f"regime_evidence: {result.get('regime_evidence')}")
+    if result.get("warning"):
+        console.print(f"warning: {result['warning']}")
+        raise typer.Exit(code=1)
+    table = Table(title="Historical Replay Selection")
+    table.add_column("rank", justify="right")
+    table.add_column("symbol")
+    table.add_column("logic_id")
+    table.add_column("score", justify="right")
+    table.add_column("n1d", justify="right")
+    table.add_column("n2d", justify="right")
+    table.add_column("n3d", justify="right")
+    table.add_column("max3d", justify="right")
+    table.add_column("dd3d", justify="right")
+    for row in result["rows"]:
+        table.add_row(
+            str(row["selection_rank"]),
+            row["symbol"],
+            row["logic_id"],
+            f"{(row.get('trigger_score') or 0):.2f}",
+            f"{(row.get('next_1d_return') or 0):.2f}",
+            f"{(row.get('next_2d_return') or 0):.2f}",
+            f"{(row.get('next_3d_return') or 0):.2f}",
+            f"{(row.get('next_3d_max_return') or 0):.2f}",
+            f"{(row.get('max_drawdown_3d') or 0):.2f}",
         )
     console.print(table)
 
