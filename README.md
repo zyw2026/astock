@@ -58,7 +58,6 @@
 - `weak_rotation_failed_break_reclaim`（弱轮动假跌破回收）
 - `fund_flow_reversal`（资金反转低吸）
 - `weak_rotation_flat_reclaim`（弱轮动横盘回收）
-- `weak_rotation_tight_range_pop`（弱轮动窄幅转强）
 - `oversold_rebound`（超跌反抽）
 
 ### `panic`
@@ -66,6 +65,30 @@
 适用场景：市场极弱，只保留非常克制的反转型低吸。
 
 - `fund_flow_reversal`（资金反转低吸）
+
+## 策略分层
+
+当前 `11` 个内置策略按最新历史回放和 validation 结果，分为以下四层。
+
+### 主力
+
+- `rotation_base_breakout`（轮动平台突破）
+- `rotation_catchup`（轮动补涨）
+- `weak_rotation_dip_absorb`（弱轮动分歧承接）
+- `trend_pullback`（主线趋势回踩）
+
+### 观察
+
+- `fund_flow_reversal`（资金反转低吸）
+- `weak_rotation_flat_reclaim`（弱轮动横盘回收）
+- `ma10_reclaim`（回踩后重回 MA10）
+- `weak_rotation_failed_break_reclaim`（弱轮动假跌破回收）
+- `limit_up_repair`（涨停后修复承接）
+
+### 次观察
+
+- `leader_first_pullback`（龙头首次分歧回踩）
+- `oversold_rebound`（超跌反抽）
 
 ## 当前实现说明
 
