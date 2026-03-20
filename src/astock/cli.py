@@ -352,6 +352,17 @@ def promote_discovered_logics(
     console.print(f"promoted_count: {count}")
 
 
+@app.command("cleanup-discovered-logics")
+def cleanup_discovered_logics(
+    require_replay_passed: bool = True,
+) -> None:
+    """Remove promoted discovered strategies that no longer meet the current gate."""
+    from astock.storage.duckdb import DuckDbStorage
+
+    removed = DuckDbStorage().cleanup_runtime_discovered_logics(require_replay_passed=require_replay_passed)
+    console.print(f"removed_count: {removed}")
+
+
 @app.command("show-replay-quality")
 def show_replay_quality(
     logic_id: str | None = None,

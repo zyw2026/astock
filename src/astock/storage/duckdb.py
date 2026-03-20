@@ -841,6 +841,40 @@ class DuckDbStorage:
             specs.append(LogicSpec.model_validate(json.loads(spec_json)))
         return specs
 
+    def cleanup_runtime_discovered_logics(self, *, require_replay_passed: bool = True) -> int:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                select count(*)
+                from runtime_discovered_logic r
+                join discovered_logic_candidate d
+                  on d.candidate_id = r.candidate_id
+                 and d.discovery_run_id = r.discovery_run_id
+                where d.approved_for_validation = false
+                   or (? and d.replay_quality_passed = false)
+                """,
+                (require_replay_passed,),
+            ).fetchone()
+            removed = int(rows[0] or 0)
+            conn.execute(
+                """
+                delete from runtime_discovered_logic
+                where exists (
+                    select 1
+                    from discovered_logic_candidate d
+                    where d.candidate_id = runtime_discovered_logic.candidate_id
+                      and d.discovery_run_id = runtime_discovered_logic.discovery_run_id
+                      and (
+                          d.approved_for_validation = false
+                          or (? and d.replay_quality_passed = false)
+                      )
+                )
+                """,
+                (require_replay_passed,),
+            )
+            conn.commit()
+        return removed
+
     def insert_factor_profiles(self, rows: list[dict], *, run_id: str) -> int:
         if not rows:
             return 0
