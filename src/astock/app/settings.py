@@ -29,6 +29,10 @@ class Settings(BaseSettings):
     default_chunk_size: int = Field(default=50)
     default_max_candidates_per_logic_day: int = Field(default=10)
     api_max_rows_per_request: int = Field(default=200)
+    discovery_candidate_limit: int = Field(default=5)
+    discovery_min_sample_count: int = Field(default=8)
+    discovery_min_big_move_rate: float = Field(default=0.22)
+    discovery_min_score: float = Field(default=58.0)
 
 
 settings = Settings()

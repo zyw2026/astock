@@ -12,6 +12,7 @@ class LogicSpec(BaseModel):
     logic_id: str
     name: str
     description: str
+    source: str = "manual"
     regime_whitelist: list[MarketRegime] = Field(default_factory=list)
     required_datasets: list[str] = Field(default_factory=list)
     ranking_rule: str | None = None

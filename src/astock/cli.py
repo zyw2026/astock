@@ -47,10 +47,11 @@ def list_logics() -> None:
     table = Table(title="Built-in Logic Candidates")
     table.add_column("logic_id")
     table.add_column("name")
+    table.add_column("source")
     table.add_column("regimes")
     table.add_column("holding_days", justify="right")
     for spec in registry.all():
-        table.add_row(spec.logic_id, spec.name, ",".join(spec.regime_whitelist), str(spec.holding_days))
+        table.add_row(spec.logic_id, spec.name, spec.source, ",".join(spec.regime_whitelist), str(spec.holding_days))
     console.print(table)
 
 
@@ -118,6 +119,114 @@ def validate_logics(
     console.print(f"logic_signal_hit rows inserted: {result['signal_hit_count']}")
     console.print(f"logic_validation_result rows inserted: {result['validation_result_count']}")
     console.print(f"logic_reliability_snapshot rows inserted: {result['snapshot_count']}")
+
+
+@app.command("discover-logics")
+def discover_logics(
+    start_date: str,
+    end_date: str,
+    regimes: str = "rotation,weak_rotation",
+    symbol_limit: int = settings.default_symbol_limit,
+    chunk_size: int = settings.default_chunk_size,
+    candidate_limit: int = settings.discovery_candidate_limit,
+) -> None:
+    """Discover explainable candidate strategies from factor panel statistics."""
+    from astock.factor_lab.service import run_discovery
+
+    result = run_discovery(
+        start_date=date.fromisoformat(start_date),
+        end_date=date.fromisoformat(end_date),
+        regimes=[item.strip() for item in regimes.split(",") if item.strip()],
+        symbol_limit=symbol_limit,
+        chunk_size=chunk_size,
+        candidate_limit=candidate_limit,
+    )
+    console.print(f"discovery_run_id: {result['discovery_run_id']}")
+    console.print(f"symbols scanned: {result['symbol_count']}")
+    console.print(f"candidates inserted: {result['candidate_count']}")
+    table = Table(title="Discovered Logic Candidates")
+    table.add_column("candidate_id")
+    table.add_column("logic_id")
+    table.add_column("regime")
+    table.add_column("samples", justify="right")
+    table.add_column("big_3d", justify="right")
+    table.add_column("max_3d", justify="right")
+    table.add_column("dd_3d", justify="right")
+    table.add_column("score", justify="right")
+    table.add_column("approved")
+    for row in result["rows"]:
+        table.add_row(
+            row["candidate_id"],
+            row["logic_id"],
+            row["regime"],
+            str(row["sample_count"]),
+            f"{(row['big_move_rate_3d'] or 0):.2%}",
+            f"{(row['avg_max_return_3d'] or 0):.2f}",
+            f"{(row['max_drawdown_3d'] or 0):.2f}",
+            f"{(row['discovery_score'] or 0):.2f}",
+            "yes" if row["approved_for_validation"] else "no",
+        )
+    console.print(table)
+
+
+@app.command("show-discovered-logics")
+def show_discovered_logics(
+    regime: str | None = None,
+    approved_only: bool = False,
+    promoted_only: bool = False,
+    limit: int = 20,
+) -> None:
+    """Show discovered candidate strategies from local storage."""
+    from astock.storage.duckdb import DuckDbStorage
+
+    rows = DuckDbStorage().list_discovered_candidates(
+        regime=regime,
+        approved_only=approved_only,
+        promoted_only=promoted_only,
+        limit=limit,
+    )
+    if not rows:
+        console.print("no discovered logic found")
+        raise typer.Exit(code=1)
+    table = Table(title="Discovered Logic Candidates")
+    table.add_column("candidate_id")
+    table.add_column("logic_id")
+    table.add_column("regime")
+    table.add_column("samples", justify="right")
+    table.add_column("big_3d", justify="right")
+    table.add_column("score", justify="right")
+    table.add_column("approved")
+    table.add_column("runtime")
+    for row in rows:
+        table.add_row(
+            row["candidate_id"],
+            row["logic_id"],
+            row["regime"],
+            str(row["sample_count"]),
+            f"{(row['big_move_rate_3d'] or 0):.2%}",
+            f"{(row['discovery_score'] or 0):.2f}",
+            "yes" if row["approved_for_validation"] else "no",
+            "yes" if row["promoted_to_runtime"] else "no",
+        )
+    console.print(table)
+
+
+@app.command("promote-discovered-logics")
+def promote_discovered_logics(
+    candidate_ids: str | None = None,
+    latest_approved: bool = True,
+    limit: int = settings.discovery_candidate_limit,
+) -> None:
+    """Promote discovered candidates into runtime registry."""
+    from astock.storage.duckdb import DuckDbStorage
+
+    ids = [item.strip() for item in candidate_ids.split(",") if item.strip()] if candidate_ids else None
+    count = DuckDbStorage().promote_discovered_candidates(
+        candidate_ids=ids,
+        latest_approved=latest_approved if ids is None else False,
+        limit=limit,
+    )
+    console.print(f"promoted_count: {count}")
 
 
 @app.command("run-selection")

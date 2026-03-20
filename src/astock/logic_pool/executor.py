@@ -13,15 +13,20 @@ def enrich_feature_frame(frame: pl.DataFrame) -> pl.DataFrame:
         .with_columns(
             [
                 pl.col("close").shift(1).over("symbol").alias("prev_close"),
+                pl.col("close").shift(3).over("symbol").alias("close_3d_ago"),
                 pl.col("close").shift(5).over("symbol").alias("close_5d_ago"),
                 pl.col("close").shift(10).over("symbol").alias("close_10d_ago"),
                 pl.col("high").rolling_max(window_size=3).shift(1).over("symbol").alias("recent_3d_high"),
                 pl.col("low").rolling_min(window_size=3).shift(1).over("symbol").alias("recent_3d_low"),
+                pl.col("high").rolling_max(window_size=5).shift(1).over("symbol").alias("recent_5d_high"),
+                pl.col("low").rolling_min(window_size=5).shift(1).over("symbol").alias("recent_5d_low"),
+                pl.col("close").rolling_mean(window_size=20).over("symbol").alias("ma20"),
             ]
         )
         .with_columns(
             [
                 (((pl.col("close") / pl.col("prev_close")) - 1) * 100).alias("ret_1d"),
+                (((pl.col("close") / pl.col("close_3d_ago")) - 1) * 100).alias("ret_3d"),
                 (((pl.col("close") / pl.col("close_5d_ago")) - 1) * 100).alias("ret_5d"),
                 (((pl.col("close") / pl.col("close_10d_ago")) - 1) * 100).alias("ret_10d"),
             ]
@@ -30,6 +35,12 @@ def enrich_feature_frame(frame: pl.DataFrame) -> pl.DataFrame:
             [
                 pl.col("ret_1d").shift(1).over("symbol").alias("prev_ret_1d"),
                 (((pl.col("recent_3d_high") - pl.col("close")) / pl.col("recent_3d_high")) * 100).alias("pullback_from_3d_high_pct"),
+                (((pl.col("recent_5d_high") - pl.col("close")) / pl.col("recent_5d_high")) * 100).alias("pullback_from_5d_high_pct"),
+                (((pl.col("close") / pl.col("ma5")) - 1) * 100).alias("close_vs_ma5_pct"),
+                (((pl.col("close") / pl.col("ma10")) - 1) * 100).alias("close_vs_ma10_pct"),
+                (((pl.col("ma5") / pl.col("ma10")) - 1) * 100).alias("ma5_vs_ma10_pct"),
+                ((((pl.col("high") - pl.col("low")) / pl.col("close")) * 100)).alias("intraday_range_pct"),
+                ((((pl.col("close") - pl.col("open")) / pl.col("open")) * 100)).alias("body_pct"),
                 pl.col("high").shift(-1).over("symbol").alias("future_high_1d"),
                 pl.col("low").shift(-1).over("symbol").alias("future_low_1d"),
                 pl.max_horizontal(
@@ -94,9 +105,57 @@ def _base_output(frame: pl.DataFrame, reason: str, score_expr: pl.Expr) -> pl.Da
     )
 
 
+def _apply_generic_conditions(frame: pl.DataFrame, conditions: list[dict]) -> pl.DataFrame:
+    filtered = frame
+    for condition in conditions:
+        field = condition["field"]
+        op = condition.get("op", "between")
+        if op == "between":
+            min_value = condition.get("min")
+            max_value = condition.get("max")
+            expr = pl.lit(True)
+            if min_value is not None:
+                expr = expr & (pl.col(field) >= min_value)
+            if max_value is not None:
+                expr = expr & (pl.col(field) <= max_value)
+            filtered = filtered.filter(expr)
+        elif op == "gte":
+            filtered = filtered.filter(pl.col(field) >= condition["value"])
+        elif op == "lte":
+            filtered = filtered.filter(pl.col(field) <= condition["value"])
+        elif op == "gt":
+            filtered = filtered.filter(pl.col(field) > condition["value"])
+        elif op == "lt":
+            filtered = filtered.filter(pl.col(field) < condition["value"])
+        else:
+            raise ValueError(f"unsupported generic condition op: {op}")
+    return filtered
+
+
+def _generic_score_expr(score_weights: list[dict]) -> pl.Expr:
+    if not score_weights:
+        return pl.lit(0.0)
+    expr = pl.lit(0.0)
+    for item in score_weights:
+        expr = expr + pl.col(item["field"]) * float(item.get("weight", 1.0))
+    return expr
+
+
+def _execute_generic_logic(frame: pl.DataFrame, logic: LogicSpec) -> pl.DataFrame:
+    conditions = logic.entry_rule.get("conditions", [])
+    score_weights = logic.entry_rule.get("score_weights", [])
+    signal_name = logic.entry_rule.get("signal_name", f"{logic.logic_id}_signal")
+    filtered = _apply_generic_conditions(frame, conditions)
+    if filtered.is_empty():
+        return pl.DataFrame()
+    return _base_output(filtered, signal_name, _generic_score_expr(score_weights))
+
+
 def execute_logic(frame: pl.DataFrame, logic: LogicSpec) -> pl.DataFrame:
     if frame.is_empty():
         return pl.DataFrame()
+    if logic.source == "factor_lab" or logic.entry_rule.get("conditions"):
+        return _execute_generic_logic(frame, logic)
     if logic.logic_id == "trend_pullback":
         filtered = frame.filter(
             (pl.col("ret_5d") >= 10)

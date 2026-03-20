@@ -223,4 +223,12 @@ DEFAULT_LOGICS: tuple[LogicSpec, ...] = (
 
 
 def build_default_registry() -> LogicRegistry:
-    return LogicRegistry(DEFAULT_LOGICS)
+    registry = LogicRegistry(DEFAULT_LOGICS)
+    try:
+        from astock.storage.duckdb import DuckDbStorage
+
+        for spec in DuckDbStorage().load_promoted_logic_specs():
+            registry.register(spec)
+    except Exception:
+        pass
+    return registry
