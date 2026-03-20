@@ -143,28 +143,143 @@ def discover_logics(
     )
     console.print(f"discovery_run_id: {result['discovery_run_id']}")
     console.print(f"symbols scanned: {result['symbol_count']}")
+    console.print(f"factor_profiles: {result['factor_profile_count']}")
+    console.print(f"factor_combos: {result['combo_count']}")
+    console.print(f"rule_variants: {result['variant_count']}")
+    console.print(f"replay_quality_rows: {result['replay_quality_count']}")
     console.print(f"candidates inserted: {result['candidate_count']}")
     table = Table(title="Discovered Logic Candidates")
     table.add_column("candidate_id")
     table.add_column("logic_id")
     table.add_column("regime")
+    table.add_column("variant")
     table.add_column("samples", justify="right")
+    table.add_column("top3", justify="right")
+    table.add_column("top5", justify="right")
     table.add_column("big_3d", justify="right")
     table.add_column("max_3d", justify="right")
     table.add_column("dd_3d", justify="right")
     table.add_column("score", justify="right")
     table.add_column("approved")
+    table.add_column("replay")
     for row in result["rows"]:
         table.add_row(
             row["candidate_id"],
             row["logic_id"],
             row["regime"],
+            row.get("variant_type") or "baseline",
             str(row["sample_count"]),
+            f"{(row.get('top3_quality_score') or 0):.2f}",
+            f"{(row.get('top5_quality_score') or 0):.2f}",
             f"{(row['big_move_rate_3d'] or 0):.2%}",
             f"{(row['avg_max_return_3d'] or 0):.2f}",
             f"{(row['max_drawdown_3d'] or 0):.2f}",
             f"{(row['discovery_score'] or 0):.2f}",
             "yes" if row["approved_for_validation"] else "no",
+            "yes" if row.get("replay_quality_passed") else "no",
+        )
+    console.print(table)
+
+
+@app.command("analyze-factors")
+def analyze_factors(
+    regime: str | None = None,
+    limit: int = 20,
+) -> None:
+    """Show latest factor bucket profiles from factor discovery."""
+    from astock.storage.duckdb import DuckDbStorage
+
+    rows = DuckDbStorage().list_latest_factor_profiles(regime=regime, limit=limit)
+    if not rows:
+        console.print("no factor profile found")
+        raise typer.Exit(code=1)
+    table = Table(title="Latest Factor Profiles")
+    table.add_column("regime")
+    table.add_column("window", justify="right")
+    table.add_column("field")
+    table.add_column("range")
+    table.add_column("samples", justify="right")
+    table.add_column("big_3d", justify="right")
+    table.add_column("score", justify="right")
+    for row in rows:
+        table.add_row(
+            row["regime"],
+            str(row["window_size"]),
+            row["field"],
+            f"{row['min_value']:.2f} ~ {row['max_value']:.2f}",
+            str(row["sample_count"]),
+            f"{(row['big_move_rate_3d'] or 0):.2%}",
+            f"{(row['discovery_score'] or 0):.2f}",
+        )
+    console.print(table)
+
+
+@app.command("analyze-factor-combos")
+def analyze_factor_combos(
+    regime: str | None = None,
+    limit: int = 20,
+) -> None:
+    """Show latest factor combo results and lift over single factor."""
+    from astock.storage.duckdb import DuckDbStorage
+
+    rows = DuckDbStorage().list_latest_factor_combo_results(regime=regime, limit=limit)
+    if not rows:
+        console.print("no factor combo found")
+        raise typer.Exit(code=1)
+    table = Table(title="Latest Factor Combos")
+    table.add_column("combo_id")
+    table.add_column("regime")
+    table.add_column("window", justify="right")
+    table.add_column("fields")
+    table.add_column("samples", justify="right")
+    table.add_column("lift", justify="right")
+    table.add_column("big_3d", justify="right")
+    table.add_column("score", justify="right")
+    for row in rows:
+        table.add_row(
+            row["combo_id"],
+            row["regime"],
+            str(row["window_size"]),
+            ",".join(row["fields"]),
+            str(row["sample_count"]),
+            f"{(row['lift_vs_single'] or 0):.2f}",
+            f"{(row['big_move_rate_3d'] or 0):.2%}",
+            f"{(row['discovery_score'] or 0):.2f}",
+        )
+    console.print(table)
+
+
+@app.command("analyze-rule-variants")
+def analyze_rule_variants(
+    regime: str | None = None,
+    limit: int = 20,
+) -> None:
+    """Show latest baseline/narrow/wide rule experiment results."""
+    from astock.storage.duckdb import DuckDbStorage
+
+    rows = DuckDbStorage().list_latest_rule_variant_results(regime=regime, limit=limit)
+    if not rows:
+        console.print("no rule variant result found")
+        raise typer.Exit(code=1)
+    table = Table(title="Latest Rule Variants")
+    table.add_column("logic_id")
+    table.add_column("regime")
+    table.add_column("variant")
+    table.add_column("samples", justify="right")
+    table.add_column("top3", justify="right")
+    table.add_column("top5", justify="right")
+    table.add_column("big_3d", justify="right")
+    table.add_column("score", justify="right")
+    for row in rows:
+        table.add_row(
+            row["logic_id"],
+            row["regime"],
+            row["variant_type"],
+            str(row["sample_count"]),
+            f"{(row['top3_quality_score'] or 0):.2f}",
+            f"{(row['top5_quality_score'] or 0):.2f}",
+            f"{(row['big_move_rate_3d'] or 0):.2%}",
+            f"{(row['discovery_score'] or 0):.2f}",
         )
     console.print(table)
 
@@ -192,20 +307,28 @@ def show_discovered_logics(
     table.add_column("candidate_id")
     table.add_column("logic_id")
     table.add_column("regime")
+    table.add_column("variant")
     table.add_column("samples", justify="right")
+    table.add_column("top3", justify="right")
+    table.add_column("top5", justify="right")
     table.add_column("big_3d", justify="right")
     table.add_column("score", justify="right")
     table.add_column("approved")
+    table.add_column("replay")
     table.add_column("runtime")
     for row in rows:
         table.add_row(
             row["candidate_id"],
             row["logic_id"],
             row["regime"],
+            row.get("variant_type") or "baseline",
             str(row["sample_count"]),
+            f"{(row.get('top3_quality_score') or 0):.2f}",
+            f"{(row.get('top5_quality_score') or 0):.2f}",
             f"{(row['big_move_rate_3d'] or 0):.2%}",
             f"{(row['discovery_score'] or 0):.2f}",
             "yes" if row["approved_for_validation"] else "no",
+            "yes" if row.get("replay_quality_passed") else "no",
             "yes" if row["promoted_to_runtime"] else "no",
         )
     console.print(table)
@@ -227,6 +350,49 @@ def promote_discovered_logics(
         limit=limit,
     )
     console.print(f"promoted_count: {count}")
+
+
+@app.command("show-replay-quality")
+def show_replay_quality(
+    logic_id: str | None = None,
+    limit: int = 20,
+) -> None:
+    """Show latest stored replay quality for discovered strategies."""
+    from astock.storage.duckdb import DuckDbStorage
+
+    rows = DuckDbStorage().list_latest_replay_quality_results(logic_id=logic_id, limit=limit)
+    if not rows:
+        console.print("no replay quality found")
+        raise typer.Exit(code=1)
+    table = Table(title="Latest Replay Quality")
+    table.add_column("logic_id")
+    table.add_column("logic_name")
+    table.add_column("days", justify="right")
+    table.add_column("top_k", justify="right")
+    table.add_column("samples", justify="right")
+    table.add_column("hit_3d", justify="right")
+    table.add_column("big_3d", justify="right")
+    table.add_column("avg_n3d", justify="right")
+    table.add_column("avg_max", justify="right")
+    table.add_column("avg_dd", justify="right")
+    table.add_column("score", justify="right")
+    table.add_column("passed")
+    for row in rows:
+        table.add_row(
+            row["logic_id"],
+            row.get("logic_name") or "",
+            str(row["trade_days"]),
+            str(row["top_k"]),
+            str(row["sample_count"]),
+            f"{(row['hit_rate_3d'] or 0):.2%}",
+            f"{(row['big_move_rate_3d'] or 0):.2%}",
+            f"{(row['avg_n3d'] or 0):.2f}",
+            f"{(row['avg_n3d_max'] or 0):.2f}",
+            f"{(row['avg_n3d_dd'] or 0):.2f}",
+            f"{(row['topk_quality_score'] or 0):.2f}",
+            "yes" if row["passed"] else "no",
+        )
+    console.print(table)
 
 
 @app.command("run-selection")
@@ -451,6 +617,125 @@ def strategy_sample(
         f"{stats['avg_n3d_dd']:.2f}",
     )
     console.print(table)
+
+
+@app.command("rolling-discovery-eval")
+def rolling_discovery_eval(
+    start_date: str,
+    end_date: str,
+    regimes: str = "rotation,weak_rotation",
+    train_days: int = 80,
+    test_days: int = 20,
+    follow_days: int = 10,
+    step_days: int = 10,
+    symbol_limit: int = settings.default_symbol_limit,
+    chunk_size: int = settings.default_chunk_size,
+    candidate_limit: int = settings.discovery_candidate_limit,
+) -> None:
+    """Run rolling discovery stability evaluation."""
+    from astock.factor_lab.stability import run_discovery_stability_eval
+
+    result = run_discovery_stability_eval(
+        start_date=date.fromisoformat(start_date),
+        end_date=date.fromisoformat(end_date),
+        regimes=[item.strip() for item in regimes.split(",") if item.strip()],
+        train_days=train_days,
+        test_days=test_days,
+        follow_days=follow_days,
+        step_days=step_days,
+        symbol_limit=symbol_limit,
+        chunk_size=chunk_size,
+        candidate_limit=candidate_limit,
+    )
+    console.print(f"eval_run_id: {result['eval_run_id']}")
+    console.print(f"window_count: {result['window_count']}")
+    console.print(f"stable_window_count: {result['stable_window_count']}")
+    table = Table(title="Rolling Discovery Windows")
+    table.add_column("window_id")
+    table.add_column("train")
+    table.add_column("test")
+    table.add_column("follow")
+    table.add_column("candidates", justify="right")
+    table.add_column("dual_pass", justify="right")
+    table.add_column("stable", justify="right")
+    table.add_column("status")
+    for row in result["window_rows"]:
+        table.add_row(
+            row["window_id"],
+            f"{row['train_start']} ~ {row['train_end']}",
+            f"{row['test_start']} ~ {row['test_end']}",
+            f"{row['follow_start']} ~ {row['follow_end']}",
+            str(row["candidate_count"]),
+            str(row["dual_pass_count"]),
+            str(row["stable_candidate_count"]),
+            row["window_status"],
+        )
+    console.print(table)
+
+
+@app.command("show-discovery-stability")
+def show_discovery_stability(
+    logic_id: str | None = None,
+    stable_only: bool = False,
+    limit: int = 20,
+) -> None:
+    """Show latest rolling discovery stability results."""
+    from astock.storage.duckdb import DuckDbStorage
+
+    storage = DuckDbStorage()
+    windows = storage.list_latest_discovery_eval_windows(limit=limit)
+    candidates = storage.list_latest_discovery_eval_candidates(logic_id=logic_id, stable_only=stable_only, limit=limit)
+    if not windows:
+        console.print("no discovery stability result found")
+        raise typer.Exit(code=1)
+    win_table = Table(title="Latest Discovery Stability Windows")
+    win_table.add_column("window_id")
+    win_table.add_column("train")
+    win_table.add_column("test")
+    win_table.add_column("follow")
+    win_table.add_column("cand", justify="right")
+    win_table.add_column("dual", justify="right")
+    win_table.add_column("stable", justify="right")
+    win_table.add_column("status")
+    for row in windows:
+        win_table.add_row(
+            row["window_id"],
+            f"{row['train_start']} ~ {row['train_end']}",
+            f"{row['test_start']} ~ {row['test_end']}",
+            f"{row['follow_start']} ~ {row['follow_end']}",
+            str(row["candidate_count"]),
+            str(row["dual_pass_count"]),
+            str(row["stable_candidate_count"]),
+            row["window_status"],
+        )
+    console.print(win_table)
+    if not candidates:
+        return
+    cand_table = Table(title="Latest Discovery Stability Candidates")
+    cand_table.add_column("window_id")
+    cand_table.add_column("logic_id")
+    cand_table.add_column("regime")
+    cand_table.add_column("train_top5", justify="right")
+    cand_table.add_column("test_top5", justify="right")
+    cand_table.add_column("test_hit", justify="right")
+    cand_table.add_column("test_big", justify="right")
+    cand_table.add_column("follow_score", justify="right")
+    cand_table.add_column("follow_ok")
+    cand_table.add_column("stable")
+    for row in candidates:
+        cand_table.add_row(
+            row["window_id"],
+            row["logic_id"],
+            row["regime"],
+            f"{(row['train_top5_score'] or 0):.2f}",
+            f"{(row['test_top5_score'] or 0):.2f}",
+            f"{(row['test_hit_3d'] or 0):.2%}",
+            f"{(row['test_big_move_3d'] or 0):.2%}",
+            f"{(row['follow_validation_score'] or 0):.2f}",
+            "yes" if row["follow_validation_approved"] else "no",
+            "yes" if row["stable_passed"] else "no",
+        )
+    console.print(cand_table)
 
 
 @app.command("show-validation")

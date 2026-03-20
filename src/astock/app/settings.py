@@ -33,6 +33,10 @@ class Settings(BaseSettings):
     discovery_min_sample_count: int = Field(default=8)
     discovery_min_big_move_rate: float = Field(default=0.22)
     discovery_min_score: float = Field(default=58.0)
+    discovery_factor_top_n: int = Field(default=6)
+    discovery_combo_top_n: int = Field(default=12)
+    replay_quality_trade_days: int = Field(default=20)
+    replay_quality_top_k: int = Field(default=5)
 
 
 settings = Settings()

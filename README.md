@@ -27,7 +27,7 @@
 
 - `validation`：验证既有策略
 - `selection`：按市场状态生成候选股、回放历史交易日
-- `factor_lab`：从历史窗口反推出可解释候选策略
+- `factor_lab`：做因子分析、组合对照、规则宽窄实验和候选策略发现
 
 ## 市场状态与策略
 
@@ -38,11 +38,11 @@
 - `weak_rotation`：轮动偏弱，更适合分歧低吸
 - `panic`：市场极弱，只保留克制型反转低吸
 
-策略数量：
+策略来源：
 
 - 内置 `11` 个 `manual` 策略
-- 当前本地运行时额外加载 `4` 个已提升的 `factor_lab` 自动反推策略
-- 当前运行时总数 `15`
+- 运行时可额外加载已提升的 `factor_lab` 自动反推策略
+- 实际运行时总数以 `astock list-logics` 为准
 
 状态启用：
 
@@ -56,14 +56,22 @@
 - 主力：`rotation_base_breakout`、`rotation_catchup`、`weak_rotation_dip_absorb`、`trend_pullback`
 - 观察：`fund_flow_reversal`、`weak_rotation_flat_reclaim`、`ma10_reclaim`、`weak_rotation_failed_break_reclaim`、`limit_up_repair`
 - 次观察：`leader_first_pullback`、`oversold_rebound`
-- 自动反推：当前已提升 `4` 个策略，最新结果里 `weak_rotation` 方向更强
+- 自动反推：只加载通过晋级门槛的候选，不直接等同于实盘主力策略
 
 ## 当前实现说明
 
 - 当前验证体系是“短线低吸因子验证版”，重点看未来 `1-3` 天的命中率、爆发率、最大拉升和回撤
 - 历史市场状态优先使用 `market_fund_flow`，缺失时使用特征面板做后备推断
-- `discover-logics` 只负责发现候选策略
-- `promote-discovered-logics` 才会把候选策略提升到运行时逻辑池
+- `discover-logics` 会同时产出：
+  - 因子画像
+  - 组合结果
+  - 规则宽窄实验
+  - `Top3 / Top5` 回放质量
+  - 最终候选策略
+- `promote-discovered-logics` 只提升同时满足：
+  - `approved_for_validation`
+  - `replay_quality_passed`
+  的候选
 - `show-selection` 当前会展示：
   - `logic_name`
   - `holding_days`
@@ -119,6 +127,10 @@ astock show-snapshot --approved-only
 astock show-selection --trade-date 2026-03-19
 astock replay-selection 2026-03-16 --symbol-limit 120 --chunk-size 20 --selection-limit 10
 astock discover-logics 2025-11-01 2026-03-12 --symbol-limit 120 --chunk-size 20 --candidate-limit 5
+astock analyze-factors --limit 10
+astock analyze-factor-combos --limit 10
+astock analyze-rule-variants --limit 10
+astock show-replay-quality --limit 10
 astock show-discovered-logics --approved-only --limit 10
 astock promote-discovered-logics --limit 5
 ```

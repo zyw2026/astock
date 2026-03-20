@@ -44,6 +44,7 @@
 - 每个逻辑必须可历史回放
 - 市场状态是逻辑启用前置条件
 - 所有外部访问必须收口在 `connectors`
+- 自动反推候选必须先过研究验收，再允许进入运行时
 
 ## 4. 分层
 
@@ -66,7 +67,7 @@ src/astock/
 - `app`：配置管理与默认参数
 - `connectors`：对接 `aks-mcp`，统一处理超时、重试、限流、错误
 - `logic_pool`：定义逻辑契约、注册逻辑、执行逻辑
-- `factor_lab`：构建因子面板、生成标签、发现候选规则、产出候选策略
+- `factor_lab`：构建因子面板、生成标签、分析因子、验证组合、做规则宽窄实验、产出候选策略
 - `validation`：生成历史命中、聚合验证结果、产出可靠性快照
 - `selection`：识别市场状态、过滤适用逻辑、生成当日选股与历史回放
 - `storage`：统一管理本地库和读写接口
@@ -88,8 +89,12 @@ src/astock/
 1. `connectors` 获取历史数据
 2. `validation` 复用标准特征构建能力
 3. `factor_lab` 构建因子面板与短线标签
-4. `factor_lab` 发现候选规则并生成候选策略
-5. `storage` 写入候选注册区
+4. `factor_lab` 依次输出：
+   - 单因子画像
+   - 组合增益结果
+   - baseline / narrow / wide 规则实验
+   - `Top3 / Top5` 回放质量
+5. `factor_lab` 只把最佳版本写入候选注册区
 6. `logic_pool` 只加载已提升到运行时的候选策略
 
 当日选股：
@@ -144,6 +149,10 @@ src/astock/
 - `discovery_run_result`
 - `discovered_logic_candidate`
 - `runtime_discovered_logic`
+- `factor_signal_profile`
+- `factor_combo_result`
+- `rule_variant_result`
+- `replay_quality_result`
 
 ## 7. 依赖约束
 
@@ -173,5 +182,14 @@ selection -> validation
 - 历史验证优先评估短线 `1-3` 天表现
 - 历史回放必须使用历史市场状态，不能复用当前市场状态
 - `discover-logics` 只发现候选；`promote-discovered-logics` 才能进入运行时
+- `factor_lab` 的固定验收顺序是：
+  - 因子画像
+  - 组合增益
+  - 规则宽窄实验
+  - `Top3 / Top5` 回放质量
+- 自动反推候选进入运行时前，至少要满足：
+  - `approved_for_validation = true`
+  - `replay_quality_passed = true`
+- `runtime_discovered_logic` 必须按 `(candidate_id, discovery_run_id)` 关联，不能只按 `candidate_id`
 - 业务层不能散落 HTTP 请求和本地 SQL
 - 长期复用能力必须进入正式模块，不能停留在一次性脚本

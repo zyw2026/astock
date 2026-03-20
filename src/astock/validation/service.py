@@ -180,7 +180,18 @@ def build_feature_frame(
         return hist
     indicators = _fetch_indicator_frame(client, symbols, start_date=start_date, end_date=end_date, chunk_size=chunk_size)
     if indicators.is_empty():
-        merged = hist
+        merged = hist.with_columns(
+            [
+                pl.lit(None).cast(pl.Float64).alias("ma5"),
+                pl.lit(None).cast(pl.Float64).alias("ma10"),
+                pl.lit(None).cast(pl.Float64).alias("macd_dif"),
+                pl.lit(None).cast(pl.Float64).alias("macd_dea"),
+                pl.lit(None).cast(pl.Float64).alias("macd_hist"),
+                pl.lit(None).cast(pl.Float64).alias("boll_mid"),
+                pl.lit(None).cast(pl.Float64).alias("boll_up"),
+                pl.lit(None).cast(pl.Float64).alias("boll_low"),
+            ]
+        )
     else:
         merged = hist.join(indicators, on=["symbol", "trade_date"], how="left")
     merged = merged.with_columns(pl.col("trade_date").cast(pl.Date))

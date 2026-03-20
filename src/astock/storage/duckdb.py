@@ -111,7 +111,127 @@ create table if not exists discovered_logic_candidate (
 
 create table if not exists runtime_discovered_logic (
     candidate_id varchar not null,
+    discovery_run_id varchar,
     promoted_at timestamp default current_timestamp
+);
+
+create table if not exists factor_signal_profile (
+    run_id varchar,
+    regime varchar not null,
+    window_size bigint not null,
+    field varchar not null,
+    min_value double,
+    max_value double,
+    sample_count bigint not null,
+    hit_rate_3d double,
+    big_move_rate_3d double,
+    avg_return_3d double,
+    avg_max_return_3d double,
+    max_drawdown_3d double,
+    discovery_score double,
+    created_at timestamp default current_timestamp
+);
+
+create table if not exists factor_combo_result (
+    run_id varchar,
+    combo_id varchar not null,
+    regime varchar not null,
+    window_size bigint not null,
+    fields_json varchar not null,
+    sample_count bigint not null,
+    hit_rate_3d double,
+    big_move_rate_3d double,
+    avg_return_3d double,
+    avg_max_return_3d double,
+    max_drawdown_3d double,
+    discovery_score double,
+    lift_vs_single double,
+    created_at timestamp default current_timestamp
+);
+
+create table if not exists rule_variant_result (
+    run_id varchar,
+    variant_id varchar not null,
+    combo_id varchar not null,
+    regime varchar not null,
+    logic_id varchar not null,
+    variant_type varchar not null,
+    sample_count bigint not null,
+    hit_rate_3d double,
+    big_move_rate_3d double,
+    avg_return_3d double,
+    avg_max_return_3d double,
+    max_drawdown_3d double,
+    top3_quality_score double,
+    top5_quality_score double,
+    discovery_score double,
+    created_at timestamp default current_timestamp
+);
+
+create table if not exists replay_quality_result (
+    run_id varchar,
+    logic_id varchar not null,
+    logic_name varchar,
+    trade_days bigint not null,
+    top_k bigint not null,
+    sample_count bigint not null,
+    hit_rate_3d double,
+    big_move_rate_3d double,
+    avg_n3d double,
+    avg_n3d_max double,
+    avg_n3d_dd double,
+    topk_quality_score double,
+    passed boolean not null,
+    created_at timestamp default current_timestamp
+);
+
+create table if not exists discovery_eval_run (
+    eval_run_id varchar,
+    train_days bigint not null,
+    test_days bigint not null,
+    follow_days bigint not null,
+    step_days bigint not null,
+    regimes varchar,
+    created_at timestamp default current_timestamp
+);
+
+create table if not exists discovery_eval_window_result (
+    eval_run_id varchar,
+    window_id varchar not null,
+    train_start date,
+    train_end date,
+    test_start date,
+    test_end date,
+    follow_start date,
+    follow_end date,
+    candidate_count bigint not null,
+    dual_pass_count bigint not null,
+    stable_candidate_count bigint not null,
+    window_status varchar not null,
+    created_at timestamp default current_timestamp
+);
+
+create table if not exists discovery_eval_candidate_result (
+    eval_run_id varchar,
+    window_id varchar not null,
+    candidate_id varchar not null,
+    logic_id varchar not null,
+    regime varchar not null,
+    discovery_run_id varchar,
+    train_top3_score double,
+    train_top5_score double,
+    test_top3_score double,
+    test_top5_score double,
+    test_hit_3d double,
+    test_big_move_3d double,
+    test_avg_n3d double,
+    test_avg_n3d_max double,
+    test_avg_n3d_dd double,
+    follow_validation_score double,
+    follow_validation_approved boolean not null,
+    stable_passed boolean not null,
+    status varchar not null,
+    created_at timestamp default current_timestamp
 );
 """
 
@@ -131,6 +251,12 @@ MIGRATION_SQL = (
     "alter table daily_selection_output add column if not exists holding_days bigint;",
     "alter table discovered_logic_candidate add column if not exists approved_for_validation boolean default false;",
     "alter table discovered_logic_candidate add column if not exists promoted_to_runtime boolean default false;",
+    "alter table discovered_logic_candidate add column if not exists parent_combo_id varchar;",
+    "alter table discovered_logic_candidate add column if not exists variant_type varchar default 'baseline';",
+    "alter table discovered_logic_candidate add column if not exists top3_quality_score double;",
+    "alter table discovered_logic_candidate add column if not exists top5_quality_score double;",
+    "alter table discovered_logic_candidate add column if not exists replay_quality_passed boolean default false;",
+    "alter table runtime_discovered_logic add column if not exists discovery_run_id varchar;",
 )
 
 
@@ -147,6 +273,19 @@ class DuckDbStorage:
             conn.execute(SCHEMA_SQL)
             for statement in MIGRATION_SQL:
                 conn.execute(statement)
+            conn.execute(
+                """
+                update runtime_discovered_logic
+                set discovery_run_id = sub.discovery_run_id
+                from (
+                    select candidate_id, discovery_run_id
+                    from discovered_logic_candidate
+                    qualify row_number() over (partition by candidate_id order by created_at desc) = 1
+                ) as sub
+                where runtime_discovered_logic.discovery_run_id is null
+                  and runtime_discovered_logic.candidate_id = sub.candidate_id
+                """
+            )
             conn.commit()
         return self.db_path
 
@@ -489,8 +628,9 @@ class DuckDbStorage:
                 insert into discovered_logic_candidate (
                     candidate_id, discovery_run_id, source, logic_id, logic_name, regime,
                     sample_count, hit_rate_3d, big_move_rate_3d, avg_return_3d, avg_max_return_3d,
-                    max_drawdown_3d, discovery_score, spec_json, approved_for_validation, promoted_to_runtime
-                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    max_drawdown_3d, discovery_score, spec_json, approved_for_validation, promoted_to_runtime,
+                    parent_combo_id, variant_type, top3_quality_score, top5_quality_score, replay_quality_passed
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     (
@@ -510,6 +650,11 @@ class DuckDbStorage:
                         row["spec_json"],
                         1 if row.get("approved_for_validation", False) else 0,
                         1 if row.get("promoted_to_runtime", False) else 0,
+                        row.get("parent_combo_id"),
+                        row.get("variant_type", "baseline"),
+                        row.get("top3_quality_score"),
+                        row.get("top5_quality_score"),
+                        1 if row.get("replay_quality_passed", False) else 0,
                     )
                     for row in rows
                 ],
@@ -541,10 +686,16 @@ class DuckDbStorage:
                 max_drawdown_3d,
                 discovery_score,
                 approved_for_validation,
+                parent_combo_id,
+                variant_type,
+                top3_quality_score,
+                top5_quality_score,
+                replay_quality_passed,
                 exists(
                     select 1
                     from runtime_discovered_logic
                     where runtime_discovered_logic.candidate_id = discovered_logic_candidate.candidate_id
+                      and runtime_discovered_logic.discovery_run_id = discovered_logic_candidate.discovery_run_id
                 ) as promoted_to_runtime,
                 created_at
             from discovered_logic_candidate
@@ -562,6 +713,7 @@ class DuckDbStorage:
                  select 1
                  from runtime_discovered_logic
                  where runtime_discovered_logic.candidate_id = discovered_logic_candidate.candidate_id
+                   and runtime_discovered_logic.discovery_run_id = discovered_logic_candidate.discovery_run_id
              )
             """
         query += " order by created_at desc, discovery_score desc, sample_count desc, logic_id limit ?"
@@ -584,8 +736,13 @@ class DuckDbStorage:
                 "max_drawdown_3d": row[11],
                 "discovery_score": row[12],
                 "approved_for_validation": row[13],
-                "promoted_to_runtime": row[14],
-                "created_at": row[15],
+                "parent_combo_id": row[14],
+                "variant_type": row[15],
+                "top3_quality_score": row[16],
+                "top5_quality_score": row[17],
+                "replay_quality_passed": row[18],
+                "promoted_to_runtime": row[19],
+                "created_at": row[20],
             }
             for row in rows
         ]
@@ -602,13 +759,20 @@ class DuckDbStorage:
                 for candidate_id in candidate_ids:
                     conn.execute(
                         """
-                        insert into runtime_discovered_logic (candidate_id)
-                        select ?
-                        where not exists (
-                            select 1 from runtime_discovered_logic where candidate_id = ?
-                        )
+                        insert into runtime_discovered_logic (candidate_id, discovery_run_id)
+                        select candidate_id, discovery_run_id
+                        from discovered_logic_candidate
+                        where candidate_id = ?
+                          and not exists (
+                              select 1
+                              from runtime_discovered_logic
+                              where runtime_discovered_logic.candidate_id = discovered_logic_candidate.candidate_id
+                                and runtime_discovered_logic.discovery_run_id = discovered_logic_candidate.discovery_run_id
+                          )
+                        order by created_at desc
+                        limit 1
                         """,
-                        (candidate_id, candidate_id),
+                        (candidate_id,),
                     )
                 conn.commit()
                 return len(candidate_ids)
@@ -621,28 +785,32 @@ class DuckDbStorage:
                         order by created_at desc, discovery_run_id desc
                         limit 1
                     )
-                    select candidate_id
+                    select candidate_id, discovery_run_id
                     from discovered_logic_candidate, latest
                     where discovered_logic_candidate.discovery_run_id = latest.discovery_run_id
                       and approved_for_validation = true
+                      and replay_quality_passed = true
                     order by discovery_score desc, sample_count desc, logic_id
                     limit ?
                     """,
                     (limit,),
                 ).fetchall()
-                ids = [row[0] for row in rows]
+                ids = [(row[0], row[1]) for row in rows]
                 if not ids:
                     return 0
-                for candidate_id in ids:
+                for candidate_id, discovery_run_id in ids:
                     conn.execute(
                         """
-                        insert into runtime_discovered_logic (candidate_id)
-                        select ?
+                        insert into runtime_discovered_logic (candidate_id, discovery_run_id)
+                        select ?, ?
                         where not exists (
-                            select 1 from runtime_discovered_logic where candidate_id = ?
+                            select 1
+                            from runtime_discovered_logic
+                            where candidate_id = ?
+                              and discovery_run_id = ?
                         )
                         """,
-                        (candidate_id, candidate_id),
+                        (candidate_id, discovery_run_id, candidate_id, discovery_run_id),
                     )
                 conn.commit()
                 return len(ids)
@@ -658,6 +826,7 @@ class DuckDbStorage:
                 from discovered_logic_candidate
                 join runtime_discovered_logic
                   on runtime_discovered_logic.candidate_id = discovered_logic_candidate.candidate_id
+                 and runtime_discovered_logic.discovery_run_id = discovered_logic_candidate.discovery_run_id
                 order by runtime_discovered_logic.promoted_at desc,
                          discovered_logic_candidate.discovery_score desc,
                          discovered_logic_candidate.logic_id
@@ -671,3 +840,535 @@ class DuckDbStorage:
             seen.add(logic_id)
             specs.append(LogicSpec.model_validate(json.loads(spec_json)))
         return specs
+
+    def insert_factor_profiles(self, rows: list[dict], *, run_id: str) -> int:
+        if not rows:
+            return 0
+        with self.connect() as conn:
+            conn.executemany(
+                """
+                insert into factor_signal_profile (
+                    run_id, regime, window_size, field, min_value, max_value, sample_count,
+                    hit_rate_3d, big_move_rate_3d, avg_return_3d, avg_max_return_3d, max_drawdown_3d, discovery_score
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        run_id,
+                        row["regime"],
+                        row["window_size"],
+                        row["field"],
+                        row.get("min_value"),
+                        row.get("max_value"),
+                        row["sample_count"],
+                        row["hit_rate_3d"],
+                        row["big_move_rate_3d"],
+                        row["avg_return_3d"],
+                        row["avg_max_return_3d"],
+                        row["max_drawdown_3d"],
+                        row["discovery_score"],
+                    )
+                    for row in rows
+                ],
+            )
+            conn.commit()
+        return len(rows)
+
+    def insert_factor_combo_results(self, rows: list[dict], *, run_id: str) -> int:
+        if not rows:
+            return 0
+        with self.connect() as conn:
+            conn.executemany(
+                """
+                insert into factor_combo_result (
+                    run_id, combo_id, regime, window_size, fields_json, sample_count, hit_rate_3d,
+                    big_move_rate_3d, avg_return_3d, avg_max_return_3d, max_drawdown_3d, discovery_score, lift_vs_single
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        run_id,
+                        row["combo_id"],
+                        row["regime"],
+                        row["window_size"],
+                        json.dumps(row["fields"], ensure_ascii=False),
+                        row["sample_count"],
+                        row["hit_rate_3d"],
+                        row["big_move_rate_3d"],
+                        row["avg_return_3d"],
+                        row["avg_max_return_3d"],
+                        row["max_drawdown_3d"],
+                        row["discovery_score"],
+                        row["lift_vs_single"],
+                    )
+                    for row in rows
+                ],
+            )
+            conn.commit()
+        return len(rows)
+
+    def insert_rule_variant_results(self, rows: list[dict], *, run_id: str) -> int:
+        if not rows:
+            return 0
+        with self.connect() as conn:
+            conn.executemany(
+                """
+                insert into rule_variant_result (
+                    run_id, variant_id, combo_id, regime, logic_id, variant_type, sample_count,
+                    hit_rate_3d, big_move_rate_3d, avg_return_3d, avg_max_return_3d,
+                    max_drawdown_3d, top3_quality_score, top5_quality_score, discovery_score
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        run_id,
+                        row["variant_id"],
+                        row["combo_id"],
+                        row["regime"],
+                        row["logic_id"],
+                        row["variant_type"],
+                        row["sample_count"],
+                        row["hit_rate_3d"],
+                        row["big_move_rate_3d"],
+                        row["avg_return_3d"],
+                        row["avg_max_return_3d"],
+                        row["max_drawdown_3d"],
+                        row["top3_quality_score"],
+                        row["top5_quality_score"],
+                        row["discovery_score"],
+                    )
+                    for row in rows
+                ],
+            )
+            conn.commit()
+        return len(rows)
+
+    def insert_replay_quality_results(self, rows: list[dict], *, run_id: str) -> int:
+        if not rows:
+            return 0
+        with self.connect() as conn:
+            conn.executemany(
+                """
+                insert into replay_quality_result (
+                    run_id, logic_id, logic_name, trade_days, top_k, sample_count, hit_rate_3d,
+                    big_move_rate_3d, avg_n3d, avg_n3d_max, avg_n3d_dd, topk_quality_score, passed
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        run_id,
+                        row["logic_id"],
+                        row.get("logic_name"),
+                        row["trade_days"],
+                        row["top_k"],
+                        row["sample_count"],
+                        row["hit_rate_3d"],
+                        row["big_move_rate_3d"],
+                        row["avg_n3d"],
+                        row["avg_n3d_max"],
+                        row["avg_n3d_dd"],
+                        row["topk_quality_score"],
+                        1 if row.get("passed", False) else 0,
+                    )
+                    for row in rows
+                ],
+            )
+            conn.commit()
+        return len(rows)
+
+    def list_latest_factor_profiles(
+        self,
+        *,
+        regime: str | None = None,
+        limit: int = 20,
+    ) -> list[dict]:
+        query = """
+            with latest as (
+                select run_id
+                from factor_signal_profile
+                order by created_at desc, run_id desc
+                limit 1
+            )
+            select factor_signal_profile.run_id, factor_signal_profile.regime, factor_signal_profile.window_size,
+                   factor_signal_profile.field, factor_signal_profile.min_value, factor_signal_profile.max_value,
+                   factor_signal_profile.sample_count, factor_signal_profile.hit_rate_3d,
+                   factor_signal_profile.big_move_rate_3d, factor_signal_profile.avg_return_3d,
+                   factor_signal_profile.avg_max_return_3d, factor_signal_profile.max_drawdown_3d,
+                   factor_signal_profile.discovery_score
+            from factor_signal_profile, latest
+            where factor_signal_profile.run_id = latest.run_id
+        """
+        params: list[object] = []
+        if regime is not None:
+            query += " and regime = ?"
+            params.append(regime)
+        query += " order by discovery_score desc, sample_count desc, field limit ?"
+        params.append(limit)
+        with self.connect(read_only=True) as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [
+            {
+                "run_id": row[0],
+                "regime": row[1],
+                "window_size": row[2],
+                "field": row[3],
+                "min_value": row[4],
+                "max_value": row[5],
+                "sample_count": row[6],
+                "hit_rate_3d": row[7],
+                "big_move_rate_3d": row[8],
+                "avg_return_3d": row[9],
+                "avg_max_return_3d": row[10],
+                "max_drawdown_3d": row[11],
+                "discovery_score": row[12],
+            }
+            for row in rows
+        ]
+
+    def list_latest_factor_combo_results(
+        self,
+        *,
+        regime: str | None = None,
+        limit: int = 20,
+    ) -> list[dict]:
+        query = """
+            with latest as (
+                select run_id
+                from factor_combo_result
+                order by created_at desc, run_id desc
+                limit 1
+            )
+            select factor_combo_result.run_id, factor_combo_result.combo_id, factor_combo_result.regime,
+                   factor_combo_result.window_size, factor_combo_result.fields_json,
+                   factor_combo_result.sample_count, factor_combo_result.hit_rate_3d,
+                   factor_combo_result.big_move_rate_3d, factor_combo_result.avg_return_3d,
+                   factor_combo_result.avg_max_return_3d, factor_combo_result.max_drawdown_3d,
+                   factor_combo_result.discovery_score, factor_combo_result.lift_vs_single
+            from factor_combo_result, latest
+            where factor_combo_result.run_id = latest.run_id
+        """
+        params: list[object] = []
+        if regime is not None:
+            query += " and regime = ?"
+            params.append(regime)
+        query += " order by discovery_score desc, lift_vs_single desc, sample_count desc limit ?"
+        params.append(limit)
+        with self.connect(read_only=True) as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [
+            {
+                "run_id": row[0],
+                "combo_id": row[1],
+                "regime": row[2],
+                "window_size": row[3],
+                "fields": json.loads(row[4]),
+                "sample_count": row[5],
+                "hit_rate_3d": row[6],
+                "big_move_rate_3d": row[7],
+                "avg_return_3d": row[8],
+                "avg_max_return_3d": row[9],
+                "max_drawdown_3d": row[10],
+                "discovery_score": row[11],
+                "lift_vs_single": row[12],
+            }
+            for row in rows
+        ]
+
+    def list_latest_rule_variant_results(
+        self,
+        *,
+        regime: str | None = None,
+        limit: int = 20,
+    ) -> list[dict]:
+        query = """
+            with latest as (
+                select run_id
+                from rule_variant_result
+                order by created_at desc, run_id desc
+                limit 1
+            )
+            select rule_variant_result.run_id, rule_variant_result.variant_id, rule_variant_result.combo_id,
+                   rule_variant_result.regime, rule_variant_result.logic_id, rule_variant_result.variant_type,
+                   rule_variant_result.sample_count, rule_variant_result.hit_rate_3d,
+                   rule_variant_result.big_move_rate_3d, rule_variant_result.avg_return_3d,
+                   rule_variant_result.avg_max_return_3d, rule_variant_result.max_drawdown_3d,
+                   rule_variant_result.top3_quality_score, rule_variant_result.top5_quality_score,
+                   rule_variant_result.discovery_score
+            from rule_variant_result, latest
+            where rule_variant_result.run_id = latest.run_id
+        """
+        params: list[object] = []
+        if regime is not None:
+            query += " and regime = ?"
+            params.append(regime)
+        query += " order by top3_quality_score desc, top5_quality_score desc, discovery_score desc limit ?"
+        params.append(limit)
+        with self.connect(read_only=True) as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [
+            {
+                "run_id": row[0],
+                "variant_id": row[1],
+                "combo_id": row[2],
+                "regime": row[3],
+                "logic_id": row[4],
+                "variant_type": row[5],
+                "sample_count": row[6],
+                "hit_rate_3d": row[7],
+                "big_move_rate_3d": row[8],
+                "avg_return_3d": row[9],
+                "avg_max_return_3d": row[10],
+                "max_drawdown_3d": row[11],
+                "top3_quality_score": row[12],
+                "top5_quality_score": row[13],
+                "discovery_score": row[14],
+            }
+            for row in rows
+        ]
+
+    def list_latest_replay_quality_results(
+        self,
+        *,
+        logic_id: str | None = None,
+        limit: int = 20,
+    ) -> list[dict]:
+        query = """
+            with latest as (
+                select run_id
+                from replay_quality_result
+                order by created_at desc, run_id desc
+                limit 1
+            )
+            select replay_quality_result.run_id, replay_quality_result.logic_id, replay_quality_result.logic_name,
+                   replay_quality_result.trade_days, replay_quality_result.top_k,
+                   replay_quality_result.sample_count, replay_quality_result.hit_rate_3d,
+                   replay_quality_result.big_move_rate_3d, replay_quality_result.avg_n3d,
+                   replay_quality_result.avg_n3d_max, replay_quality_result.avg_n3d_dd,
+                   replay_quality_result.topk_quality_score, replay_quality_result.passed
+            from replay_quality_result, latest
+            where replay_quality_result.run_id = latest.run_id
+        """
+        params: list[object] = []
+        if logic_id is not None:
+            query += " and logic_id = ?"
+            params.append(logic_id)
+        query += " order by topk_quality_score desc, sample_count desc, logic_id limit ?"
+        params.append(limit)
+        with self.connect(read_only=True) as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [
+            {
+                "run_id": row[0],
+                "logic_id": row[1],
+                "logic_name": row[2],
+                "trade_days": row[3],
+                "top_k": row[4],
+                "sample_count": row[5],
+                "hit_rate_3d": row[6],
+                "big_move_rate_3d": row[7],
+                "avg_n3d": row[8],
+                "avg_n3d_max": row[9],
+                "avg_n3d_dd": row[10],
+                "topk_quality_score": row[11],
+                "passed": row[12],
+            }
+            for row in rows
+        ]
+
+    def insert_discovery_eval_run(
+        self,
+        *,
+        eval_run_id: str,
+        train_days: int,
+        test_days: int,
+        follow_days: int,
+        step_days: int,
+        regimes: list[str],
+    ) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                insert into discovery_eval_run (
+                    eval_run_id, train_days, test_days, follow_days, step_days, regimes
+                ) values (?, ?, ?, ?, ?, ?)
+                """,
+                (eval_run_id, train_days, test_days, follow_days, step_days, ",".join(regimes)),
+            )
+            conn.commit()
+
+    def insert_discovery_eval_window_results(self, rows: list[dict], *, eval_run_id: str) -> int:
+        if not rows:
+            return 0
+        with self.connect() as conn:
+            conn.executemany(
+                """
+                insert into discovery_eval_window_result (
+                    eval_run_id, window_id, train_start, train_end, test_start, test_end,
+                    follow_start, follow_end, candidate_count, dual_pass_count,
+                    stable_candidate_count, window_status
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        eval_run_id,
+                        row["window_id"],
+                        row["train_start"],
+                        row["train_end"],
+                        row["test_start"],
+                        row["test_end"],
+                        row["follow_start"],
+                        row["follow_end"],
+                        row["candidate_count"],
+                        row["dual_pass_count"],
+                        row["stable_candidate_count"],
+                        row["window_status"],
+                    )
+                    for row in rows
+                ],
+            )
+            conn.commit()
+        return len(rows)
+
+    def insert_discovery_eval_candidate_results(self, rows: list[dict], *, eval_run_id: str) -> int:
+        if not rows:
+            return 0
+        with self.connect() as conn:
+            conn.executemany(
+                """
+                insert into discovery_eval_candidate_result (
+                    eval_run_id, window_id, candidate_id, logic_id, regime, discovery_run_id,
+                    train_top3_score, train_top5_score, test_top3_score, test_top5_score,
+                    test_hit_3d, test_big_move_3d, test_avg_n3d, test_avg_n3d_max, test_avg_n3d_dd,
+                    follow_validation_score, follow_validation_approved, stable_passed, status
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        eval_run_id,
+                        row["window_id"],
+                        row["candidate_id"],
+                        row["logic_id"],
+                        row["regime"],
+                        row["discovery_run_id"],
+                        row.get("train_top3_score"),
+                        row.get("train_top5_score"),
+                        row.get("test_top3_score"),
+                        row.get("test_top5_score"),
+                        row.get("test_hit_3d"),
+                        row.get("test_big_move_3d"),
+                        row.get("test_avg_n3d"),
+                        row.get("test_avg_n3d_max"),
+                        row.get("test_avg_n3d_dd"),
+                        row.get("follow_validation_score"),
+                        1 if row.get("follow_validation_approved", False) else 0,
+                        1 if row.get("stable_passed", False) else 0,
+                        row["status"],
+                    )
+                    for row in rows
+                ],
+            )
+            conn.commit()
+        return len(rows)
+
+    def list_latest_discovery_eval_windows(self, *, limit: int = 20) -> list[dict]:
+        query = """
+            with latest as (
+                select eval_run_id
+                from discovery_eval_run
+                order by created_at desc, eval_run_id desc
+                limit 1
+            )
+            select discovery_eval_window_result.eval_run_id, discovery_eval_window_result.window_id,
+                   discovery_eval_window_result.train_start, discovery_eval_window_result.train_end,
+                   discovery_eval_window_result.test_start, discovery_eval_window_result.test_end,
+                   discovery_eval_window_result.follow_start, discovery_eval_window_result.follow_end,
+                   discovery_eval_window_result.candidate_count, discovery_eval_window_result.dual_pass_count,
+                   discovery_eval_window_result.stable_candidate_count, discovery_eval_window_result.window_status
+            from discovery_eval_window_result, latest
+            where discovery_eval_window_result.eval_run_id = latest.eval_run_id
+            order by train_start
+            limit ?
+        """
+        with self.connect(read_only=True) as conn:
+            rows = conn.execute(query, (limit,)).fetchall()
+        return [
+            {
+                "eval_run_id": row[0],
+                "window_id": row[1],
+                "train_start": row[2],
+                "train_end": row[3],
+                "test_start": row[4],
+                "test_end": row[5],
+                "follow_start": row[6],
+                "follow_end": row[7],
+                "candidate_count": row[8],
+                "dual_pass_count": row[9],
+                "stable_candidate_count": row[10],
+                "window_status": row[11],
+            }
+            for row in rows
+        ]
+
+    def list_latest_discovery_eval_candidates(
+        self,
+        *,
+        logic_id: str | None = None,
+        stable_only: bool = False,
+        limit: int = 20,
+    ) -> list[dict]:
+        query = """
+            with latest as (
+                select eval_run_id
+                from discovery_eval_run
+                order by created_at desc, eval_run_id desc
+                limit 1
+            )
+            select discovery_eval_candidate_result.eval_run_id, discovery_eval_candidate_result.window_id,
+                   discovery_eval_candidate_result.candidate_id, discovery_eval_candidate_result.logic_id,
+                   discovery_eval_candidate_result.regime, discovery_eval_candidate_result.discovery_run_id,
+                   discovery_eval_candidate_result.train_top3_score, discovery_eval_candidate_result.train_top5_score,
+                   discovery_eval_candidate_result.test_top3_score, discovery_eval_candidate_result.test_top5_score,
+                   discovery_eval_candidate_result.test_hit_3d, discovery_eval_candidate_result.test_big_move_3d,
+                   discovery_eval_candidate_result.test_avg_n3d, discovery_eval_candidate_result.test_avg_n3d_max,
+                   discovery_eval_candidate_result.test_avg_n3d_dd,
+                   discovery_eval_candidate_result.follow_validation_score,
+                   discovery_eval_candidate_result.follow_validation_approved,
+                   discovery_eval_candidate_result.stable_passed,
+                   discovery_eval_candidate_result.status
+            from discovery_eval_candidate_result, latest
+            where discovery_eval_candidate_result.eval_run_id = latest.eval_run_id
+        """
+        params: list[object] = []
+        if logic_id is not None:
+            query += " and logic_id = ?"
+            params.append(logic_id)
+        if stable_only:
+            query += " and stable_passed = true"
+        query += " order by stable_passed desc, test_top5_score desc, follow_validation_score desc nulls last limit ?"
+        params.append(limit)
+        with self.connect(read_only=True) as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [
+            {
+                "eval_run_id": row[0],
+                "window_id": row[1],
+                "candidate_id": row[2],
+                "logic_id": row[3],
+                "regime": row[4],
+                "discovery_run_id": row[5],
+                "train_top3_score": row[6],
+                "train_top5_score": row[7],
+                "test_top3_score": row[8],
+                "test_top5_score": row[9],
+                "test_hit_3d": row[10],
+                "test_big_move_3d": row[11],
+                "test_avg_n3d": row[12],
+                "test_avg_n3d_max": row[13],
+                "test_avg_n3d_dd": row[14],
+                "follow_validation_score": row[15],
+                "follow_validation_approved": row[16],
+                "stable_passed": row[17],
+                "status": row[18],
+            }
+            for row in rows
+        ]
