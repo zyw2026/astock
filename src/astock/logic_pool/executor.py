@@ -118,32 +118,51 @@ def execute_logic(frame: pl.DataFrame, logic: LogicSpec) -> pl.DataFrame:
         return _base_output(filtered, "leader_first_pullback_signal", pl.col("prev_ret_1d") - pl.col("ret_1d").abs())
     if logic.logic_id == "rotation_catchup":
         filtered = frame.filter(
-            (pl.col("ret_10d") >= 5)
-            & (pl.col("ret_10d") <= 20)
-            & (pl.col("ret_1d") >= 0.5)
-            & (pl.col("ret_1d") <= 5)
-            & (pl.col("close") > pl.col("ma5"))
-            & ((pl.col("close") / pl.col("ma10")) <= 1.08)
-        )
-        return _base_output(filtered, "rotation_catchup_signal", pl.col("ret_10d") - (pl.col("close") / pl.col("ma10") - 1) * 100)
-    if logic.logic_id == "rotation_base_breakout":
-        filtered = frame.filter(
-            (pl.col("ret_10d") >= 2)
-            & (pl.col("ret_10d") <= 15)
-            & (pl.col("ret_5d") >= 1)
-            & (pl.col("ret_5d") <= 8)
-            & (pl.col("ret_1d") >= 1)
-            & (pl.col("ret_1d") <= 4)
+            (pl.col("ret_10d") >= 4)
+            & (pl.col("ret_10d") <= 14)
+            & (pl.col("ret_5d") >= 0)
+            & (pl.col("ret_5d") <= 7)
+            & (pl.col("prev_ret_1d") <= 2.5)
+            & (pl.col("ret_1d") >= 0.8)
+            & (pl.col("ret_1d") <= 3.5)
             & (pl.col("close") > pl.col("ma5"))
             & (pl.col("ma5") >= pl.col("ma10"))
             & ((pl.col("close") / pl.col("ma10")) <= 1.05)
             & (pl.col("pullback_from_3d_high_pct") >= 0)
-            & (pl.col("pullback_from_3d_high_pct") <= 2.5)
+            & (pl.col("pullback_from_3d_high_pct") <= 3.0)
+        )
+        return _base_output(
+            filtered,
+            "rotation_catchup_signal",
+            pl.col("ret_10d") * 0.6
+            + pl.col("ret_5d") * 0.8
+            + pl.col("ret_1d") * 1.2
+            - (pl.col("close") / pl.col("ma10") - 1) * 150
+            - pl.col("pullback_from_3d_high_pct") * 0.7,
+        )
+    if logic.logic_id == "rotation_base_breakout":
+        filtered = frame.filter(
+            (pl.col("ret_10d") >= 3)
+            & (pl.col("ret_10d") <= 13)
+            & (pl.col("ret_5d") >= 1)
+            & (pl.col("ret_5d") <= 6)
+            & (pl.col("prev_ret_1d") <= 2.5)
+            & (pl.col("ret_1d") >= 1)
+            & (pl.col("ret_1d") <= 3.5)
+            & (pl.col("close") > pl.col("ma5"))
+            & (pl.col("ma5") >= pl.col("ma10"))
+            & ((pl.col("close") / pl.col("ma10")) <= 1.04)
+            & (pl.col("pullback_from_3d_high_pct") >= 0)
+            & (pl.col("pullback_from_3d_high_pct") <= 2.0)
         )
         return _base_output(
             filtered,
             "rotation_base_breakout_signal",
-            pl.col("ret_10d") * 0.6 + pl.col("ret_1d") * 2 - (pl.col("close") / pl.col("ma10") - 1) * 100,
+            pl.col("ret_10d") * 0.6
+            + pl.col("ret_5d") * 0.5
+            + pl.col("ret_1d") * 1.8
+            - (pl.col("close") / pl.col("ma10") - 1) * 120
+            - pl.col("pullback_from_3d_high_pct") * 0.6,
         )
     if logic.logic_id == "ma10_reclaim":
         filtered = frame.filter(
