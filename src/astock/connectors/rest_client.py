@@ -175,6 +175,20 @@ class AksMcpRestClient:
             payload["fields"] = fields
         return self.query_tool("stock_indicators", payload)
 
+    def stock_profile(
+        self,
+        *,
+        symbol: list[str],
+        as_of_date: str | None = None,
+        fields: list[str] | None = None,
+    ) -> dict:
+        payload: dict = {"symbol": symbol}
+        if as_of_date is not None:
+            payload["as_of_date"] = as_of_date
+        if fields:
+            payload["fields"] = fields
+        return self.query_tool("stock_profile", payload)
+
     def stock_selector(
         self,
         *,

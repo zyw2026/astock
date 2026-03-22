@@ -144,6 +144,9 @@ def discover_logics(
     console.print(f"discovery_run_id: {result['discovery_run_id']}")
     console.print(f"symbols scanned: {result['symbol_count']}")
     console.print(f"factor_profiles: {result['factor_profile_count']}")
+    console.print(f"factor_ic_rows: {result['factor_ic_count']}")
+    console.print(f"factor_monotonicity_rows: {result['factor_monotonicity_count']}")
+    console.print(f"factor_whitelist: {result['whitelist_count']}")
     console.print(f"factor_combos: {result['combo_count']}")
     console.print(f"rule_variants: {result['variant_count']}")
     console.print(f"replay_quality_rows: {result['replay_quality_count']}")
@@ -152,7 +155,9 @@ def discover_logics(
     table.add_column("candidate_id")
     table.add_column("logic_id")
     table.add_column("regime")
+    table.add_column("detail")
     table.add_column("variant")
+    table.add_column("ranking")
     table.add_column("samples", justify="right")
     table.add_column("top3", justify="right")
     table.add_column("top5", justify="right")
@@ -167,7 +172,9 @@ def discover_logics(
             row["candidate_id"],
             row["logic_id"],
             row["regime"],
+            row.get("regime_detail") or row["regime"],
             row.get("variant_type") or "baseline",
+            row.get("ranking_type") or "factor_mix",
             str(row["sample_count"]),
             f"{(row.get('top3_quality_score') or 0):.2f}",
             f"{(row.get('top5_quality_score') or 0):.2f}",
@@ -179,6 +186,141 @@ def discover_logics(
             "yes" if row.get("replay_quality_passed") else "no",
         )
     console.print(table)
+
+
+@app.command("seed-factor-pool")
+def seed_factor_pool() -> None:
+    """Seed factor candidate pool for automated discovery loop."""
+    from astock.factor_lab.loop import seed_factor_pool
+
+    result = seed_factor_pool()
+    console.print(f"seed_count: {result['seed_count']}")
+    console.print(f"inserted_count: {result['inserted_count']}")
+
+
+@app.command("auto-discovery-loop")
+def auto_discovery_loop(
+    start_date: str,
+    end_date: str,
+    regimes: str = "rotation,weak_rotation",
+    symbol_limit: int = settings.default_symbol_limit,
+    chunk_size: int = settings.default_chunk_size,
+    candidate_limit: int = settings.discovery_candidate_limit,
+    batch_size: int = 6,
+    max_iterations: int = 8,
+    target_runtime_candidates: int = 2,
+    max_stagnation_iterations: int = 3,
+) -> None:
+    """Run iterative factor-batch discovery until runtime candidates or stop condition."""
+    from astock.factor_lab.loop import run_auto_discovery_loop
+
+    result = run_auto_discovery_loop(
+        start_date=date.fromisoformat(start_date),
+        end_date=date.fromisoformat(end_date),
+        regimes=[item.strip() for item in regimes.split(",") if item.strip()],
+        symbol_limit=symbol_limit,
+        chunk_size=chunk_size,
+        candidate_limit=candidate_limit,
+        batch_size=batch_size,
+        max_iterations=max_iterations,
+        target_runtime_candidates=target_runtime_candidates,
+        max_stagnation_iterations=max_stagnation_iterations,
+    )
+    console.print(f"loop_run_id: {result['loop_run_id']}")
+    console.print(f"status: {result['status']}")
+    console.print(f"iteration_count: {result['iteration_count']}")
+    console.print(f"runtime_promoted_total: {result['runtime_promoted_total']}")
+    table = Table(title="Auto Discovery Loop")
+    table.add_column("iter", justify="right")
+    table.add_column("factors")
+    table.add_column("whitelist", justify="right")
+    table.add_column("combos", justify="right")
+    table.add_column("variants", justify="right")
+    table.add_column("replay", justify="right")
+    table.add_column("runtime", justify="right")
+    table.add_column("status")
+    for row in result["rows"]:
+        table.add_row(
+            str(row["iteration_no"]),
+            ",".join(row["factor_batch"]),
+            str(row["whitelist_pass_count"]),
+            str(row["combo_count"]),
+            str(row["variant_count"]),
+            str(row["replay_pass_count"]),
+            str(row["runtime_promoted_count"]),
+            row["status"],
+        )
+    console.print(table)
+
+
+@app.command("show-discovery-loop")
+def show_discovery_loop(
+    loop_run_id: str | None = None,
+    limit: int = 20,
+) -> None:
+    """Show latest or specified auto discovery loop results."""
+    from astock.storage.duckdb import DuckDbStorage
+
+    storage = DuckDbStorage()
+    runs = storage.list_latest_discovery_loop_runs(limit=1 if loop_run_id is None else limit)
+    if loop_run_id is None:
+        if not runs:
+            console.print("no discovery loop found")
+            raise typer.Exit(code=1)
+        loop_run_id = runs[0]["loop_run_id"]
+    iterations = storage.list_discovery_loop_iterations(loop_run_id=loop_run_id, limit=limit)
+    factors = storage.list_discovery_loop_factor_results(loop_run_id=loop_run_id, limit=limit)
+    if not iterations:
+        console.print("no discovery loop iteration found")
+        raise typer.Exit(code=1)
+    console.print(f"loop_run_id: {loop_run_id}")
+    table = Table(title="Discovery Loop Iterations")
+    table.add_column("iter", justify="right")
+    table.add_column("factors")
+    table.add_column("whitelist", justify="right")
+    table.add_column("combos", justify="right")
+    table.add_column("variants", justify="right")
+    table.add_column("replay", justify="right")
+    table.add_column("runtime", justify="right")
+    table.add_column("watch", justify="right")
+    table.add_column("retired", justify="right")
+    table.add_column("status")
+    for row in iterations:
+        table.add_row(
+            str(row["iteration_no"]),
+            ",".join(row["factor_batch"]),
+            str(row["whitelist_pass_count"]),
+            str(row["combo_count"]),
+            str(row["variant_count"]),
+            str(row["replay_pass_count"]),
+            str(row["runtime_promoted_count"]),
+            str(row["watch_count"]),
+            str(row["retired_count"]),
+            row["status"],
+        )
+    console.print(table)
+    if factors:
+        factor_table = Table(title="Discovery Loop Factor Results")
+        factor_table.add_column("iter", justify="right")
+        factor_table.add_column("field")
+        factor_table.add_column("whitelist")
+        factor_table.add_column("rank_ic", justify="right")
+        factor_table.add_column("rank_ir", justify="right")
+        factor_table.add_column("mono", justify="right")
+        factor_table.add_column("score", justify="right")
+        factor_table.add_column("result")
+        for row in factors:
+            factor_table.add_row(
+                str(row["iteration_no"]),
+                row["field"],
+                row["whitelist_status"],
+                f"{(row['best_rank_ic_mean'] or 0):.4f}",
+                f"{(row['best_rank_ic_ir'] or 0):.4f}",
+                f"{(row['best_monotonic_score'] or 0):.2f}",
+                f"{(row['best_discovery_score'] or 0):.2f}",
+                row["result_status"],
+            )
+        console.print(factor_table)
 
 
 @app.command("analyze-factors")
@@ -195,6 +337,7 @@ def analyze_factors(
         raise typer.Exit(code=1)
     table = Table(title="Latest Factor Profiles")
     table.add_column("regime")
+    table.add_column("detail")
     table.add_column("window", justify="right")
     table.add_column("field")
     table.add_column("range")
@@ -204,6 +347,7 @@ def analyze_factors(
     for row in rows:
         table.add_row(
             row["regime"],
+            row.get("regime_detail") or row["regime"],
             str(row["window_size"]),
             row["field"],
             f"{row['min_value']:.2f} ~ {row['max_value']:.2f}",
@@ -229,6 +373,7 @@ def analyze_factor_combos(
     table = Table(title="Latest Factor Combos")
     table.add_column("combo_id")
     table.add_column("regime")
+    table.add_column("detail")
     table.add_column("window", justify="right")
     table.add_column("fields")
     table.add_column("samples", justify="right")
@@ -239,12 +384,61 @@ def analyze_factor_combos(
         table.add_row(
             row["combo_id"],
             row["regime"],
+            row.get("regime_detail") or row["regime"],
             str(row["window_size"]),
             ",".join(row["fields"]),
             str(row["sample_count"]),
             f"{(row['lift_vs_single'] or 0):.2f}",
             f"{(row['big_move_rate_3d'] or 0):.2%}",
             f"{(row['discovery_score'] or 0):.2f}",
+        )
+    console.print(table)
+
+
+@app.command("show-factor-whitelist")
+def show_factor_whitelist(
+    regime: str | None = None,
+    eligible_only: bool = False,
+    limit: int = 20,
+) -> None:
+    """Show latest factor whitelist snapshot."""
+    from astock.storage.duckdb import DuckDbStorage
+
+    rows = DuckDbStorage().list_latest_factor_whitelist(regime=regime, eligible_only=eligible_only, limit=limit)
+    if not rows:
+        console.print("no factor whitelist found")
+        raise typer.Exit(code=1)
+    table = Table(title="Latest Factor Whitelist")
+    table.add_column("regime")
+    table.add_column("detail")
+    table.add_column("field")
+    table.add_column("status")
+    table.add_column("eligible")
+    table.add_column("hit_win", justify="right")
+    table.add_column("stable_win", justify="right")
+    table.add_column("best_score", justify="right")
+    table.add_column("avg_score", justify="right")
+    table.add_column("rank_ic", justify="right")
+    table.add_column("rank_ir", justify="right")
+    table.add_column("mono", justify="right")
+    table.add_column("w_score", justify="right")
+    table.add_column("best_big", justify="right")
+    for row in rows:
+        table.add_row(
+            row["regime"],
+            row.get("regime_detail") or row["regime"],
+            row["field"],
+            row["status"],
+            "yes" if row["eligible"] else "no",
+            str(row["window_hit_count"]),
+            str(row["stable_window_count"]),
+            f"{(row['best_discovery_score'] or 0):.2f}",
+            f"{(row['avg_discovery_score'] or 0):.2f}",
+            f"{(row.get('avg_rank_ic_mean') or 0):.4f}",
+            f"{(row.get('best_rank_ic_ir') or 0):.4f}",
+            f"{(row.get('best_monotonic_score') or 0):.2f}",
+            f"{(row.get('whitelist_score') or 0):.2f}",
+            f"{(row['best_big_move_rate_3d'] or 0):.2%}",
         )
     console.print(table)
 
@@ -264,7 +458,9 @@ def analyze_rule_variants(
     table = Table(title="Latest Rule Variants")
     table.add_column("logic_id")
     table.add_column("regime")
+    table.add_column("detail")
     table.add_column("variant")
+    table.add_column("ranking")
     table.add_column("samples", justify="right")
     table.add_column("top3", justify="right")
     table.add_column("top5", justify="right")
@@ -274,7 +470,9 @@ def analyze_rule_variants(
         table.add_row(
             row["logic_id"],
             row["regime"],
+            row.get("regime_detail") or row["regime"],
             row["variant_type"],
+            row.get("ranking_type") or "factor_mix",
             str(row["sample_count"]),
             f"{(row['top3_quality_score'] or 0):.2f}",
             f"{(row['top5_quality_score'] or 0):.2f}",
@@ -307,7 +505,10 @@ def show_discovered_logics(
     table.add_column("candidate_id")
     table.add_column("logic_id")
     table.add_column("regime")
+    table.add_column("detail")
     table.add_column("variant")
+    table.add_column("ranking")
+    table.add_column("life")
     table.add_column("samples", justify="right")
     table.add_column("top3", justify="right")
     table.add_column("top5", justify="right")
@@ -321,7 +522,10 @@ def show_discovered_logics(
             row["candidate_id"],
             row["logic_id"],
             row["regime"],
+            row.get("regime_detail") or row["regime"],
             row.get("variant_type") or "baseline",
+            row.get("ranking_type") or "factor_mix",
+            row.get("lifecycle_state") or "candidate",
             str(row["sample_count"]),
             f"{(row.get('top3_quality_score') or 0):.2f}",
             f"{(row.get('top5_quality_score') or 0):.2f}",
@@ -627,6 +831,106 @@ def strategy_sample(
         f"{stats['avg_n3d_max']:.2f}",
         f"{stats['avg_n3d_dd']:.2f}",
     )
+    console.print(table)
+
+
+@app.command("evaluate-factors")
+def evaluate_factors(
+    start_date: str,
+    end_date: str,
+    regimes: str = "rotation,weak_rotation",
+    symbol_limit: int = settings.default_symbol_limit,
+    chunk_size: int = settings.default_chunk_size,
+) -> None:
+    """Run factor IC and monotonicity evaluation."""
+    from astock.factor_lab.service import run_factor_evaluation
+
+    result = run_factor_evaluation(
+        start_date=date.fromisoformat(start_date),
+        end_date=date.fromisoformat(end_date),
+        regimes=[item.strip() for item in regimes.split(",") if item.strip()],
+        symbol_limit=symbol_limit,
+        chunk_size=chunk_size,
+    )
+    console.print(f"factor_eval_run_id: {result['run_id']}")
+    console.print(f"symbols scanned: {result['symbol_count']}")
+    console.print(f"factor_ic_rows: {result['ic_count']}")
+    console.print(f"factor_monotonicity_rows: {result['monotonicity_count']}")
+
+
+@app.command("show-factor-ic")
+def show_factor_ic(
+    regime: str | None = None,
+    limit: int = 20,
+) -> None:
+    """Show latest factor IC / RankIC results."""
+    from astock.storage.duckdb import DuckDbStorage
+
+    rows = DuckDbStorage().list_latest_factor_ic_results(regime=regime, limit=limit)
+    if not rows:
+        console.print("no factor ic result found")
+        raise typer.Exit(code=1)
+    table = Table(title="Latest Factor IC")
+    table.add_column("regime")
+    table.add_column("detail")
+    table.add_column("window", justify="right")
+    table.add_column("field")
+    table.add_column("dates", justify="right")
+    table.add_column("samples", justify="right")
+    table.add_column("ic", justify="right")
+    table.add_column("rank_ic", justify="right")
+    table.add_column("ic_ir", justify="right")
+    table.add_column("rank_ir", justify="right")
+    for row in rows:
+        table.add_row(
+            row["regime"],
+            row.get("regime_detail") or row["regime"],
+            str(row["window_size"]),
+            row["field"],
+            str(row["date_count"]),
+            str(row["sample_count"]),
+            f"{(row['ic_mean'] or 0):.4f}",
+            f"{(row['rank_ic_mean'] or 0):.4f}",
+            f"{(row['ic_ir'] or 0):.4f}",
+            f"{(row['rank_ic_ir'] or 0):.4f}",
+        )
+    console.print(table)
+
+
+@app.command("show-factor-monotonicity")
+def show_factor_monotonicity(
+    regime: str | None = None,
+    limit: int = 20,
+) -> None:
+    """Show latest factor monotonicity results."""
+    from astock.storage.duckdb import DuckDbStorage
+
+    rows = DuckDbStorage().list_latest_factor_monotonicity_results(regime=regime, limit=limit)
+    if not rows:
+        console.print("no factor monotonicity result found")
+        raise typer.Exit(code=1)
+    table = Table(title="Latest Factor Monotonicity")
+    table.add_column("regime")
+    table.add_column("detail")
+    table.add_column("window", justify="right")
+    table.add_column("field")
+    table.add_column("samples", justify="right")
+    table.add_column("spread", justify="right")
+    table.add_column("direction")
+    table.add_column("passed")
+    table.add_column("score", justify="right")
+    for row in rows:
+        table.add_row(
+            row["regime"],
+            row.get("regime_detail") or row["regime"],
+            str(row["window_size"]),
+            row["field"],
+            str(row["sample_count"]),
+            f"{(row['top_bottom_spread'] or 0):.4f}",
+            row["monotonic_direction"],
+            "yes" if row["monotonic_passed"] else "no",
+            f"{(row['eval_score'] or 0):.2f}",
+        )
     console.print(table)
 
 

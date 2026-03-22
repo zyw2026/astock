@@ -67,7 +67,8 @@ src/astock/
 - `app`：配置管理与默认参数
 - `connectors`：对接 `aks-mcp`，统一处理超时、重试、限流、错误
 - `logic_pool`：定义逻辑契约、注册逻辑、执行逻辑
-- `factor_lab`：构建因子面板、生成标签、分析因子、验证组合、做规则宽窄实验、产出候选策略
+- `factor_lab`：构建因子面板、生成标签、分析因子、验证组合、做规则宽窄实验、做排序实验、产出候选策略
+- `factor_lab`：构建因子面板、生成标签、分析因子、验证组合、做规则宽窄实验、做排序实验、产出候选策略、驱动自动研究循环
 - `validation`：生成历史命中、聚合验证结果、产出可靠性快照
 - `selection`：识别市场状态、过滤适用逻辑、生成当日选股与历史回放
 - `storage`：统一管理本地库和读写接口
@@ -90,12 +91,37 @@ src/astock/
 2. `validation` 复用标准特征构建能力
 3. `factor_lab` 构建因子面板与短线标签
 4. `factor_lab` 依次输出：
+   - 因子白名单
    - 单因子画像
    - 组合增益结果
    - baseline / narrow / wide 规则实验
+   - `ranking_type` 排序实验
    - `Top3 / Top5` 回放质量
 5. `factor_lab` 只把最佳版本写入候选注册区
 6. `logic_pool` 只加载已提升到运行时的候选策略
+
+自动研究循环：
+
+1. `factor_lab` 从因子候选池中选一批待测因子
+2. 复用 discovery 链跑：
+   - 因子验收
+   - 白名单
+   - 组合
+   - 规则压缩
+   - replay 验收
+3. 自动把结果分流到：
+   - `runtime`
+   - `watch`
+   - `retired`
+4. 本轮没有晋级候选时，自动切到下一批因子
+5. 达到目标候选数、连续停滞或因子池耗尽时停止
+
+稳定性验收：
+
+1. `rolling-discovery-eval` 按滚动窗口重复 discovery
+2. 每个窗口对双通过候选做样本外 `Top3 / Top5` 回放
+3. 再看后续 follow 窗口 validation 是否继续成立
+4. 只有能通过滚动稳定性验收的自动策略，才适合长期保留
 
 当日选股：
 
@@ -153,6 +179,15 @@ src/astock/
 - `factor_combo_result`
 - `rule_variant_result`
 - `replay_quality_result`
+- `factor_whitelist_snapshot`
+- `factor_whitelist_history`
+- `factor_candidate_pool`
+- `discovery_eval_run`
+- `discovery_eval_window_result`
+- `discovery_eval_candidate_result`
+- `discovery_loop_run`
+- `discovery_loop_iteration`
+- `discovery_loop_factor_result`
 
 ## 7. 依赖约束
 
@@ -182,14 +217,24 @@ selection -> validation
 - 历史验证优先评估短线 `1-3` 天表现
 - 历史回放必须使用历史市场状态，不能复用当前市场状态
 - `discover-logics` 只发现候选；`promote-discovered-logics` 才能进入运行时
+- `auto-discovery-loop` 只编排研究循环，不绕过 discovery / replay / promote 现有链路
 - `factor_lab` 的固定验收顺序是：
+  - 因子白名单
   - 因子画像
   - 组合增益
   - 规则宽窄实验
+  - 排序实验
   - `Top3 / Top5` 回放质量
+- `rotation / weak_rotation` 在 discovery 中允许继续细分子状态，子状态只能服务研究与候选筛选，不能直接替代运行时主状态
 - 自动反推候选进入运行时前，至少要满足：
   - `approved_for_validation = true`
   - `replay_quality_passed = true`
+- 自动研究循环必须按批次推进，不能默认每轮全因子池一起重跑
+- 自动反推候选应记录：
+  - `regime_detail`
+  - `variant_type`
+  - `ranking_type`
+  - `lifecycle_state`
 - `runtime_discovered_logic` 必须按 `(candidate_id, discovery_run_id)` 关联，不能只按 `candidate_id`
 - 业务层不能散落 HTTP 请求和本地 SQL
 - 长期复用能力必须进入正式模块，不能停留在一次性脚本

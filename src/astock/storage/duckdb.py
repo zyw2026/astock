@@ -118,6 +118,7 @@ create table if not exists runtime_discovered_logic (
 create table if not exists factor_signal_profile (
     run_id varchar,
     regime varchar not null,
+    regime_detail varchar,
     window_size bigint not null,
     field varchar not null,
     min_value double,
@@ -132,10 +133,86 @@ create table if not exists factor_signal_profile (
     created_at timestamp default current_timestamp
 );
 
+create table if not exists factor_whitelist_snapshot (
+    run_id varchar,
+    regime varchar not null,
+    regime_detail varchar,
+    field varchar not null,
+    window_hit_count bigint not null,
+    stable_window_count bigint not null,
+    best_discovery_score double,
+    avg_discovery_score double,
+    best_big_move_rate_3d double,
+    best_rank_ic_mean double,
+    avg_rank_ic_mean double,
+    best_rank_ic_ir double,
+    monotonic_pass_count bigint,
+    best_monotonic_score double,
+    whitelist_score double,
+    status varchar not null,
+    eligible boolean not null,
+    created_at timestamp default current_timestamp
+);
+
+create table if not exists factor_whitelist_history (
+    run_id varchar,
+    regime varchar not null,
+    regime_detail varchar,
+    field varchar not null,
+    window_hit_count bigint not null,
+    stable_window_count bigint not null,
+    best_discovery_score double,
+    avg_discovery_score double,
+    best_big_move_rate_3d double,
+    best_rank_ic_mean double,
+    avg_rank_ic_mean double,
+    best_rank_ic_ir double,
+    monotonic_pass_count bigint,
+    best_monotonic_score double,
+    whitelist_score double,
+    status varchar not null,
+    eligible boolean not null,
+    created_at timestamp default current_timestamp
+);
+
+create table if not exists factor_ic_result (
+    run_id varchar,
+    regime varchar not null,
+    regime_detail varchar,
+    window_size bigint not null,
+    field varchar not null,
+    date_count bigint not null,
+    sample_count bigint not null,
+    ic_mean double,
+    ic_std double,
+    rank_ic_mean double,
+    rank_ic_std double,
+    ic_ir double,
+    rank_ic_ir double,
+    created_at timestamp default current_timestamp
+);
+
+create table if not exists factor_monotonicity_result (
+    run_id varchar,
+    regime varchar not null,
+    regime_detail varchar,
+    window_size bigint not null,
+    field varchar not null,
+    quantiles bigint not null,
+    sample_count bigint not null,
+    bucket_returns_json varchar not null,
+    top_bottom_spread double,
+    monotonic_direction varchar not null,
+    monotonic_passed boolean not null,
+    eval_score double,
+    created_at timestamp default current_timestamp
+);
+
 create table if not exists factor_combo_result (
     run_id varchar,
     combo_id varchar not null,
     regime varchar not null,
+    regime_detail varchar,
     window_size bigint not null,
     fields_json varchar not null,
     sample_count bigint not null,
@@ -154,8 +231,10 @@ create table if not exists rule_variant_result (
     variant_id varchar not null,
     combo_id varchar not null,
     regime varchar not null,
+    regime_detail varchar,
     logic_id varchar not null,
     variant_type varchar not null,
+    ranking_type varchar default 'factor_mix',
     sample_count bigint not null,
     hit_rate_3d double,
     big_move_rate_3d double,
@@ -233,6 +312,60 @@ create table if not exists discovery_eval_candidate_result (
     status varchar not null,
     created_at timestamp default current_timestamp
 );
+
+create table if not exists factor_candidate_pool (
+    factor_id varchar not null,
+    field varchar not null,
+    label varchar not null,
+    category varchar not null,
+    source varchar not null,
+    status varchar not null,
+    priority bigint not null,
+    notes varchar,
+    last_tested_at timestamp,
+    created_at timestamp default current_timestamp
+);
+
+create table if not exists discovery_loop_run (
+    loop_run_id varchar not null,
+    start_date date,
+    end_date date,
+    regimes varchar,
+    symbol_limit bigint,
+    chunk_size bigint,
+    status varchar not null,
+    created_at timestamp default current_timestamp,
+    completed_at timestamp
+);
+
+create table if not exists discovery_loop_iteration (
+    loop_run_id varchar not null,
+    iteration_no bigint not null,
+    factor_batch_json varchar not null,
+    candidate_factor_count bigint not null,
+    whitelist_pass_count bigint not null,
+    combo_count bigint not null,
+    variant_count bigint not null,
+    replay_pass_count bigint not null,
+    runtime_promoted_count bigint not null,
+    watch_count bigint not null,
+    retired_count bigint not null,
+    status varchar not null,
+    created_at timestamp default current_timestamp
+);
+
+create table if not exists discovery_loop_factor_result (
+    loop_run_id varchar not null,
+    iteration_no bigint not null,
+    field varchar not null,
+    whitelist_status varchar not null,
+    best_rank_ic_mean double,
+    best_rank_ic_ir double,
+    best_monotonic_score double,
+    best_discovery_score double,
+    result_status varchar not null,
+    created_at timestamp default current_timestamp
+);
 """
 
 MIGRATION_SQL = (
@@ -251,12 +384,35 @@ MIGRATION_SQL = (
     "alter table daily_selection_output add column if not exists holding_days bigint;",
     "alter table discovered_logic_candidate add column if not exists approved_for_validation boolean default false;",
     "alter table discovered_logic_candidate add column if not exists promoted_to_runtime boolean default false;",
+    "alter table discovered_logic_candidate add column if not exists regime_detail varchar;",
     "alter table discovered_logic_candidate add column if not exists parent_combo_id varchar;",
     "alter table discovered_logic_candidate add column if not exists variant_type varchar default 'baseline';",
+    "alter table discovered_logic_candidate add column if not exists ranking_type varchar default 'factor_mix';",
+    "alter table discovered_logic_candidate add column if not exists lifecycle_state varchar default 'candidate';",
     "alter table discovered_logic_candidate add column if not exists top3_quality_score double;",
     "alter table discovered_logic_candidate add column if not exists top5_quality_score double;",
     "alter table discovered_logic_candidate add column if not exists replay_quality_passed boolean default false;",
     "alter table runtime_discovered_logic add column if not exists discovery_run_id varchar;",
+    "alter table factor_signal_profile add column if not exists regime_detail varchar;",
+    "alter table factor_whitelist_snapshot add column if not exists regime_detail varchar;",
+    "alter table factor_whitelist_history add column if not exists regime_detail varchar;",
+    "alter table factor_whitelist_snapshot add column if not exists best_rank_ic_mean double;",
+    "alter table factor_whitelist_snapshot add column if not exists avg_rank_ic_mean double;",
+    "alter table factor_whitelist_snapshot add column if not exists best_rank_ic_ir double;",
+    "alter table factor_whitelist_snapshot add column if not exists monotonic_pass_count bigint;",
+    "alter table factor_whitelist_snapshot add column if not exists best_monotonic_score double;",
+    "alter table factor_whitelist_snapshot add column if not exists whitelist_score double;",
+    "alter table factor_whitelist_history add column if not exists best_rank_ic_mean double;",
+    "alter table factor_whitelist_history add column if not exists avg_rank_ic_mean double;",
+    "alter table factor_whitelist_history add column if not exists best_rank_ic_ir double;",
+    "alter table factor_whitelist_history add column if not exists monotonic_pass_count bigint;",
+    "alter table factor_whitelist_history add column if not exists best_monotonic_score double;",
+    "alter table factor_whitelist_history add column if not exists whitelist_score double;",
+    "alter table factor_combo_result add column if not exists regime_detail varchar;",
+    "alter table rule_variant_result add column if not exists regime_detail varchar;",
+    "alter table rule_variant_result add column if not exists ranking_type varchar default 'factor_mix';",
+    "alter table factor_ic_result add column if not exists regime_detail varchar;",
+    "alter table factor_monotonicity_result add column if not exists regime_detail varchar;",
 )
 
 
@@ -626,11 +782,11 @@ class DuckDbStorage:
             conn.executemany(
                 """
                 insert into discovered_logic_candidate (
-                    candidate_id, discovery_run_id, source, logic_id, logic_name, regime,
+                    candidate_id, discovery_run_id, source, logic_id, logic_name, regime, regime_detail,
                     sample_count, hit_rate_3d, big_move_rate_3d, avg_return_3d, avg_max_return_3d,
                     max_drawdown_3d, discovery_score, spec_json, approved_for_validation, promoted_to_runtime,
-                    parent_combo_id, variant_type, top3_quality_score, top5_quality_score, replay_quality_passed
-                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    parent_combo_id, variant_type, ranking_type, lifecycle_state, top3_quality_score, top5_quality_score, replay_quality_passed
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     (
@@ -640,6 +796,7 @@ class DuckDbStorage:
                         row["logic_id"],
                         row["logic_name"],
                         row["regime"],
+                        row.get("regime_detail"),
                         row["sample_count"],
                         row.get("hit_rate_3d"),
                         row.get("big_move_rate_3d"),
@@ -652,6 +809,8 @@ class DuckDbStorage:
                         1 if row.get("promoted_to_runtime", False) else 0,
                         row.get("parent_combo_id"),
                         row.get("variant_type", "baseline"),
+                        row.get("ranking_type", "factor_mix"),
+                        row.get("lifecycle_state", "candidate"),
                         row.get("top3_quality_score"),
                         row.get("top5_quality_score"),
                         1 if row.get("replay_quality_passed", False) else 0,
@@ -678,6 +837,7 @@ class DuckDbStorage:
                 logic_id,
                 logic_name,
                 regime,
+                regime_detail,
                 sample_count,
                 hit_rate_3d,
                 big_move_rate_3d,
@@ -688,6 +848,8 @@ class DuckDbStorage:
                 approved_for_validation,
                 parent_combo_id,
                 variant_type,
+                ranking_type,
+                lifecycle_state,
                 top3_quality_score,
                 top5_quality_score,
                 replay_quality_passed,
@@ -728,21 +890,24 @@ class DuckDbStorage:
                 "logic_id": row[3],
                 "logic_name": row[4],
                 "regime": row[5],
-                "sample_count": row[6],
-                "hit_rate_3d": row[7],
-                "big_move_rate_3d": row[8],
-                "avg_return_3d": row[9],
-                "avg_max_return_3d": row[10],
-                "max_drawdown_3d": row[11],
-                "discovery_score": row[12],
-                "approved_for_validation": row[13],
-                "parent_combo_id": row[14],
-                "variant_type": row[15],
-                "top3_quality_score": row[16],
-                "top5_quality_score": row[17],
-                "replay_quality_passed": row[18],
-                "promoted_to_runtime": row[19],
-                "created_at": row[20],
+                "regime_detail": row[6],
+                "sample_count": row[7],
+                "hit_rate_3d": row[8],
+                "big_move_rate_3d": row[9],
+                "avg_return_3d": row[10],
+                "avg_max_return_3d": row[11],
+                "max_drawdown_3d": row[12],
+                "discovery_score": row[13],
+                "approved_for_validation": row[14],
+                "parent_combo_id": row[15],
+                "variant_type": row[16],
+                "ranking_type": row[17],
+                "lifecycle_state": row[18],
+                "top3_quality_score": row[19],
+                "top5_quality_score": row[20],
+                "replay_quality_passed": row[21],
+                "promoted_to_runtime": row[22],
+                "created_at": row[23],
             }
             for row in rows
         ]
@@ -774,6 +939,21 @@ class DuckDbStorage:
                         """,
                         (candidate_id,),
                     )
+                    conn.execute(
+                        """
+                        update discovered_logic_candidate
+                        set lifecycle_state = 'runtime'
+                        where candidate_id = ?
+                          and discovery_run_id = (
+                              select discovery_run_id
+                              from discovered_logic_candidate
+                              where candidate_id = ?
+                              order by created_at desc
+                              limit 1
+                          )
+                        """,
+                        (candidate_id, candidate_id),
+                    )
                 conn.commit()
                 return len(candidate_ids)
             if latest_approved:
@@ -785,7 +965,7 @@ class DuckDbStorage:
                         order by created_at desc, discovery_run_id desc
                         limit 1
                     )
-                    select candidate_id, discovery_run_id
+                    select discovered_logic_candidate.candidate_id, discovered_logic_candidate.discovery_run_id
                     from discovered_logic_candidate, latest
                     where discovered_logic_candidate.discovery_run_id = latest.discovery_run_id
                       and approved_for_validation = true
@@ -812,9 +992,89 @@ class DuckDbStorage:
                         """,
                         (candidate_id, discovery_run_id, candidate_id, discovery_run_id),
                     )
+                    conn.execute(
+                        """
+                        update discovered_logic_candidate
+                        set lifecycle_state = 'runtime'
+                        where candidate_id = ? and discovery_run_id = ?
+                        """,
+                        (candidate_id, discovery_run_id),
+                    )
                 conn.commit()
                 return len(ids)
         return 0
+
+    def apply_candidate_lifecycle_for_run(self, *, discovery_run_id: str) -> dict:
+        with self.connect() as conn:
+            runtime_count = int(
+                conn.execute(
+                    """
+                    select count(*)
+                    from discovered_logic_candidate d
+                    where d.discovery_run_id = ?
+                      and exists (
+                          select 1
+                          from runtime_discovered_logic r
+                          where r.candidate_id = d.candidate_id
+                            and r.discovery_run_id = d.discovery_run_id
+                      )
+                    """,
+                    (discovery_run_id,),
+                ).fetchone()[0]
+                or 0
+            )
+            conn.execute(
+                """
+                update discovered_logic_candidate
+                set lifecycle_state = 'watch'
+                where discovery_run_id = ?
+                  and lifecycle_state <> 'runtime'
+                  and (
+                      approved_for_validation = true
+                      or coalesce(top5_quality_score, 0) >= 55
+                  )
+                """,
+                (discovery_run_id,),
+            )
+            watch_count = int(
+                conn.execute(
+                    """
+                    select count(*)
+                    from discovered_logic_candidate
+                    where discovery_run_id = ?
+                      and lifecycle_state = 'watch'
+                    """,
+                    (discovery_run_id,),
+                ).fetchone()[0]
+                or 0
+            )
+            conn.execute(
+                """
+                update discovered_logic_candidate
+                set lifecycle_state = 'retired'
+                where discovery_run_id = ?
+                  and lifecycle_state not in ('runtime', 'watch')
+                """,
+                (discovery_run_id,),
+            )
+            retired_count = int(
+                conn.execute(
+                    """
+                    select count(*)
+                    from discovered_logic_candidate
+                    where discovery_run_id = ?
+                      and lifecycle_state = 'retired'
+                    """,
+                    (discovery_run_id,),
+                ).fetchone()[0]
+                or 0
+            )
+            conn.commit()
+        return {
+            "runtime_count": runtime_count,
+            "watch_count": watch_count,
+            "retired_count": retired_count,
+        }
 
     def load_promoted_logic_specs(self) -> list[LogicSpec]:
         if not self.db_path.exists():
@@ -872,8 +1132,281 @@ class DuckDbStorage:
                 """,
                 (require_replay_passed,),
             )
+            conn.execute(
+                """
+                update discovered_logic_candidate
+                set lifecycle_state = 'retired'
+                where approved_for_validation = false
+                   or (? and replay_quality_passed = false)
+                """,
+                (require_replay_passed,),
+            )
             conn.commit()
         return removed
+
+    def seed_factor_candidate_pool(self, rows: list[dict]) -> int:
+        if not rows:
+            return 0
+        with self.connect() as conn:
+            for row in rows:
+                conn.execute(
+                    """
+                    insert into factor_candidate_pool (
+                        factor_id, field, label, category, source, status, priority, notes, last_tested_at
+                    )
+                    select ?, ?, ?, ?, ?, ?, ?, ?, ?
+                    where not exists (
+                        select 1 from factor_candidate_pool where field = ?
+                    )
+                    """,
+                    (
+                        row["factor_id"],
+                        row["field"],
+                        row["label"],
+                        row["category"],
+                        row.get("source", "manual"),
+                        row.get("status", "pending"),
+                        row.get("priority", 0),
+                        row.get("notes"),
+                        row.get("last_tested_at"),
+                        row["field"],
+                    ),
+                )
+            conn.commit()
+        return len(rows)
+
+    def list_factor_candidate_pool(self, *, statuses: list[str] | None = None, limit: int = 50) -> list[dict]:
+        query = """
+            select factor_id, field, label, category, source, status, priority, notes, last_tested_at, created_at
+            from factor_candidate_pool
+            where 1 = 1
+        """
+        params: list[object] = []
+        if statuses:
+            placeholders = ",".join(["?"] * len(statuses))
+            query += f" and status in ({placeholders})"
+            params.extend(statuses)
+        query += " order by priority desc, created_at asc, field limit ?"
+        params.append(limit)
+        with self.connect(read_only=True) as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [
+            {
+                "factor_id": row[0],
+                "field": row[1],
+                "label": row[2],
+                "category": row[3],
+                "source": row[4],
+                "status": row[5],
+                "priority": row[6],
+                "notes": row[7],
+                "last_tested_at": row[8],
+                "created_at": row[9],
+            }
+            for row in rows
+        ]
+
+    def update_factor_candidate_statuses(self, rows: list[dict]) -> int:
+        if not rows:
+            return 0
+        with self.connect() as conn:
+            conn.executemany(
+                """
+                update factor_candidate_pool
+                set status = ?, notes = ?, last_tested_at = current_timestamp
+                where field = ?
+                """,
+                [
+                    (
+                        row["status"],
+                        row.get("notes"),
+                        row["field"],
+                    )
+                    for row in rows
+                ],
+            )
+            conn.commit()
+        return len(rows)
+
+    def insert_discovery_loop_run(
+        self,
+        *,
+        loop_run_id: str,
+        start_date: str,
+        end_date: str,
+        regimes: list[str],
+        symbol_limit: int,
+        chunk_size: int,
+        status: str,
+    ) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                insert into discovery_loop_run (
+                    loop_run_id, start_date, end_date, regimes, symbol_limit, chunk_size, status
+                ) values (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (loop_run_id, start_date, end_date, ",".join(regimes), symbol_limit, chunk_size, status),
+            )
+            conn.commit()
+
+    def complete_discovery_loop_run(self, *, loop_run_id: str, status: str) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                update discovery_loop_run
+                set status = ?, completed_at = current_timestamp
+                where loop_run_id = ?
+                """,
+                (status, loop_run_id),
+            )
+            conn.commit()
+
+    def insert_discovery_loop_iteration(self, row: dict) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                insert into discovery_loop_iteration (
+                    loop_run_id, iteration_no, factor_batch_json, candidate_factor_count, whitelist_pass_count,
+                    combo_count, variant_count, replay_pass_count, runtime_promoted_count, watch_count,
+                    retired_count, status
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    row["loop_run_id"],
+                    row["iteration_no"],
+                    json.dumps(row.get("factor_batch", []), ensure_ascii=False),
+                    row.get("candidate_factor_count", 0),
+                    row.get("whitelist_pass_count", 0),
+                    row.get("combo_count", 0),
+                    row.get("variant_count", 0),
+                    row.get("replay_pass_count", 0),
+                    row.get("runtime_promoted_count", 0),
+                    row.get("watch_count", 0),
+                    row.get("retired_count", 0),
+                    row.get("status", "done"),
+                ),
+            )
+            conn.commit()
+
+    def insert_discovery_loop_factor_results(self, rows: list[dict]) -> int:
+        if not rows:
+            return 0
+        with self.connect() as conn:
+            conn.executemany(
+                """
+                insert into discovery_loop_factor_result (
+                    loop_run_id, iteration_no, field, whitelist_status, best_rank_ic_mean, best_rank_ic_ir,
+                    best_monotonic_score, best_discovery_score, result_status
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        row["loop_run_id"],
+                        row["iteration_no"],
+                        row["field"],
+                        row["whitelist_status"],
+                        row.get("best_rank_ic_mean"),
+                        row.get("best_rank_ic_ir"),
+                        row.get("best_monotonic_score"),
+                        row.get("best_discovery_score"),
+                        row["result_status"],
+                    )
+                    for row in rows
+                ],
+            )
+            conn.commit()
+        return len(rows)
+
+    def list_latest_discovery_loop_runs(self, *, limit: int = 5) -> list[dict]:
+        with self.connect(read_only=True) as conn:
+            rows = conn.execute(
+                """
+                select loop_run_id, start_date, end_date, regimes, symbol_limit, chunk_size, status, created_at, completed_at
+                from discovery_loop_run
+                order by created_at desc, loop_run_id desc
+                limit ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [
+            {
+                "loop_run_id": row[0],
+                "start_date": row[1],
+                "end_date": row[2],
+                "regimes": row[3],
+                "symbol_limit": row[4],
+                "chunk_size": row[5],
+                "status": row[6],
+                "created_at": row[7],
+                "completed_at": row[8],
+            }
+            for row in rows
+        ]
+
+    def list_discovery_loop_iterations(self, *, loop_run_id: str, limit: int = 50) -> list[dict]:
+        with self.connect(read_only=True) as conn:
+            rows = conn.execute(
+                """
+                select loop_run_id, iteration_no, factor_batch_json, candidate_factor_count, whitelist_pass_count,
+                       combo_count, variant_count, replay_pass_count, runtime_promoted_count, watch_count,
+                       retired_count, status, created_at
+                from discovery_loop_iteration
+                where loop_run_id = ?
+                order by iteration_no asc
+                limit ?
+                """,
+                (loop_run_id, limit),
+            ).fetchall()
+        return [
+            {
+                "loop_run_id": row[0],
+                "iteration_no": row[1],
+                "factor_batch": json.loads(row[2]) if row[2] else [],
+                "candidate_factor_count": row[3],
+                "whitelist_pass_count": row[4],
+                "combo_count": row[5],
+                "variant_count": row[6],
+                "replay_pass_count": row[7],
+                "runtime_promoted_count": row[8],
+                "watch_count": row[9],
+                "retired_count": row[10],
+                "status": row[11],
+                "created_at": row[12],
+            }
+            for row in rows
+        ]
+
+    def list_discovery_loop_factor_results(self, *, loop_run_id: str, iteration_no: int | None = None, limit: int = 100) -> list[dict]:
+        query = """
+            select loop_run_id, iteration_no, field, whitelist_status, best_rank_ic_mean, best_rank_ic_ir,
+                   best_monotonic_score, best_discovery_score, result_status, created_at
+            from discovery_loop_factor_result
+            where loop_run_id = ?
+        """
+        params: list[object] = [loop_run_id]
+        if iteration_no is not None:
+            query += " and iteration_no = ?"
+            params.append(iteration_no)
+        query += " order by iteration_no asc, best_discovery_score desc, field limit ?"
+        params.append(limit)
+        with self.connect(read_only=True) as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [
+            {
+                "loop_run_id": row[0],
+                "iteration_no": row[1],
+                "field": row[2],
+                "whitelist_status": row[3],
+                "best_rank_ic_mean": row[4],
+                "best_rank_ic_ir": row[5],
+                "best_monotonic_score": row[6],
+                "best_discovery_score": row[7],
+                "result_status": row[8],
+                "created_at": row[9],
+            }
+            for row in rows
+        ]
 
     def insert_factor_profiles(self, rows: list[dict], *, run_id: str) -> int:
         if not rows:
@@ -882,14 +1415,15 @@ class DuckDbStorage:
             conn.executemany(
                 """
                 insert into factor_signal_profile (
-                    run_id, regime, window_size, field, min_value, max_value, sample_count,
+                    run_id, regime, regime_detail, window_size, field, min_value, max_value, sample_count,
                     hit_rate_3d, big_move_rate_3d, avg_return_3d, avg_max_return_3d, max_drawdown_3d, discovery_score
-                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     (
                         run_id,
                         row["regime"],
+                        row.get("regime_detail"),
                         row["window_size"],
                         row["field"],
                         row.get("min_value"),
@@ -908,6 +1442,122 @@ class DuckDbStorage:
             conn.commit()
         return len(rows)
 
+    def insert_factor_whitelist(self, rows: list[dict], *, run_id: str) -> int:
+        if not rows:
+            return 0
+        values = [
+            (
+                run_id,
+                row["regime"],
+                row.get("regime_detail"),
+                row["field"],
+                row["window_hit_count"],
+                row["stable_window_count"],
+                row["best_discovery_score"],
+                row["avg_discovery_score"],
+                row["best_big_move_rate_3d"],
+                row.get("best_rank_ic_mean", 0.0),
+                row.get("avg_rank_ic_mean", 0.0),
+                row.get("best_rank_ic_ir", 0.0),
+                row.get("monotonic_pass_count", 0),
+                row.get("best_monotonic_score", 0.0),
+                row.get("whitelist_score", 0.0),
+                row["status"],
+                1 if row.get("eligible", False) else 0,
+            )
+            for row in rows
+        ]
+        with self.connect() as conn:
+            conn.executemany(
+                """
+                insert into factor_whitelist_snapshot (
+                    run_id, regime, regime_detail, field, window_hit_count, stable_window_count,
+                    best_discovery_score, avg_discovery_score, best_big_move_rate_3d,
+                    best_rank_ic_mean, avg_rank_ic_mean, best_rank_ic_ir,
+                    monotonic_pass_count, best_monotonic_score, whitelist_score, status, eligible
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                values,
+            )
+            conn.executemany(
+                """
+                insert into factor_whitelist_history (
+                    run_id, regime, regime_detail, field, window_hit_count, stable_window_count,
+                    best_discovery_score, avg_discovery_score, best_big_move_rate_3d,
+                    best_rank_ic_mean, avg_rank_ic_mean, best_rank_ic_ir,
+                    monotonic_pass_count, best_monotonic_score, whitelist_score, status, eligible
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                values,
+            )
+            conn.commit()
+        return len(rows)
+
+    def insert_factor_ic_results(self, rows: list[dict], *, run_id: str) -> int:
+        if not rows:
+            return 0
+        with self.connect() as conn:
+            conn.executemany(
+                """
+                insert into factor_ic_result (
+                    run_id, regime, regime_detail, window_size, field, date_count, sample_count,
+                    ic_mean, ic_std, rank_ic_mean, rank_ic_std, ic_ir, rank_ic_ir
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        run_id,
+                        row["regime"],
+                        row.get("regime_detail"),
+                        row["window_size"],
+                        row["field"],
+                        row["date_count"],
+                        row["sample_count"],
+                        row["ic_mean"],
+                        row["ic_std"],
+                        row["rank_ic_mean"],
+                        row["rank_ic_std"],
+                        row["ic_ir"],
+                        row["rank_ic_ir"],
+                    )
+                    for row in rows
+                ],
+            )
+            conn.commit()
+        return len(rows)
+
+    def insert_factor_monotonicity_results(self, rows: list[dict], *, run_id: str) -> int:
+        if not rows:
+            return 0
+        with self.connect() as conn:
+            conn.executemany(
+                """
+                insert into factor_monotonicity_result (
+                    run_id, regime, regime_detail, window_size, field, quantiles, sample_count,
+                    bucket_returns_json, top_bottom_spread, monotonic_direction, monotonic_passed, eval_score
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        run_id,
+                        row["regime"],
+                        row.get("regime_detail"),
+                        row["window_size"],
+                        row["field"],
+                        row["quantiles"],
+                        row["sample_count"],
+                        json.dumps(row.get("bucket_returns", []), ensure_ascii=False),
+                        row["top_bottom_spread"],
+                        row["monotonic_direction"],
+                        1 if row.get("monotonic_passed", False) else 0,
+                        row["eval_score"],
+                    )
+                    for row in rows
+                ],
+            )
+            conn.commit()
+        return len(rows)
+
     def insert_factor_combo_results(self, rows: list[dict], *, run_id: str) -> int:
         if not rows:
             return 0
@@ -915,15 +1565,16 @@ class DuckDbStorage:
             conn.executemany(
                 """
                 insert into factor_combo_result (
-                    run_id, combo_id, regime, window_size, fields_json, sample_count, hit_rate_3d,
+                    run_id, combo_id, regime, regime_detail, window_size, fields_json, sample_count, hit_rate_3d,
                     big_move_rate_3d, avg_return_3d, avg_max_return_3d, max_drawdown_3d, discovery_score, lift_vs_single
-                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     (
                         run_id,
                         row["combo_id"],
                         row["regime"],
+                        row.get("regime_detail"),
                         row["window_size"],
                         json.dumps(row["fields"], ensure_ascii=False),
                         row["sample_count"],
@@ -948,10 +1599,10 @@ class DuckDbStorage:
             conn.executemany(
                 """
                 insert into rule_variant_result (
-                    run_id, variant_id, combo_id, regime, logic_id, variant_type, sample_count,
+                    run_id, variant_id, combo_id, regime, regime_detail, logic_id, variant_type, ranking_type, sample_count,
                     hit_rate_3d, big_move_rate_3d, avg_return_3d, avg_max_return_3d,
                     max_drawdown_3d, top3_quality_score, top5_quality_score, discovery_score
-                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     (
@@ -959,8 +1610,10 @@ class DuckDbStorage:
                         row["variant_id"],
                         row["combo_id"],
                         row["regime"],
+                        row.get("regime_detail"),
                         row["logic_id"],
                         row["variant_type"],
+                        row.get("ranking_type", "factor_mix"),
                         row["sample_count"],
                         row["hit_rate_3d"],
                         row["big_move_rate_3d"],
@@ -1023,8 +1676,8 @@ class DuckDbStorage:
                 order by created_at desc, run_id desc
                 limit 1
             )
-            select factor_signal_profile.run_id, factor_signal_profile.regime, factor_signal_profile.window_size,
-                   factor_signal_profile.field, factor_signal_profile.min_value, factor_signal_profile.max_value,
+            select factor_signal_profile.run_id, factor_signal_profile.regime, factor_signal_profile.regime_detail,
+                   factor_signal_profile.window_size, factor_signal_profile.field, factor_signal_profile.min_value, factor_signal_profile.max_value,
                    factor_signal_profile.sample_count, factor_signal_profile.hit_rate_3d,
                    factor_signal_profile.big_move_rate_3d, factor_signal_profile.avg_return_3d,
                    factor_signal_profile.avg_max_return_3d, factor_signal_profile.max_drawdown_3d,
@@ -1044,17 +1697,165 @@ class DuckDbStorage:
             {
                 "run_id": row[0],
                 "regime": row[1],
-                "window_size": row[2],
-                "field": row[3],
-                "min_value": row[4],
-                "max_value": row[5],
+                "regime_detail": row[2],
+                "window_size": row[3],
+                "field": row[4],
+                "min_value": row[5],
+                "max_value": row[6],
+                "sample_count": row[7],
+                "hit_rate_3d": row[8],
+                "big_move_rate_3d": row[9],
+                "avg_return_3d": row[10],
+                "avg_max_return_3d": row[11],
+                "max_drawdown_3d": row[12],
+                "discovery_score": row[13],
+            }
+            for row in rows
+        ]
+
+    def list_latest_factor_ic_results(
+        self,
+        *,
+        regime: str | None = None,
+        limit: int = 20,
+    ) -> list[dict]:
+        query = """
+            with latest as (
+                select run_id
+                from factor_ic_result
+                order by created_at desc, run_id desc
+                limit 1
+            )
+            select factor_ic_result.run_id, factor_ic_result.regime, factor_ic_result.regime_detail, factor_ic_result.window_size, factor_ic_result.field, factor_ic_result.date_count, factor_ic_result.sample_count,
+                   factor_ic_result.ic_mean, factor_ic_result.ic_std, factor_ic_result.rank_ic_mean, factor_ic_result.rank_ic_std, factor_ic_result.ic_ir, factor_ic_result.rank_ic_ir
+            from factor_ic_result, latest
+            where factor_ic_result.run_id = latest.run_id
+        """
+        params: list[object] = []
+        if regime is not None:
+            query += " and regime = ?"
+            params.append(regime)
+        query += " order by abs(rank_ic_mean) desc, rank_ic_ir desc, sample_count desc, field limit ?"
+        params.append(limit)
+        with self.connect(read_only=True) as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [
+            {
+                "run_id": row[0],
+                "regime": row[1],
+                "regime_detail": row[2],
+                "window_size": row[3],
+                "field": row[4],
+                "date_count": row[5],
                 "sample_count": row[6],
-                "hit_rate_3d": row[7],
-                "big_move_rate_3d": row[8],
-                "avg_return_3d": row[9],
-                "avg_max_return_3d": row[10],
-                "max_drawdown_3d": row[11],
-                "discovery_score": row[12],
+                "ic_mean": row[7],
+                "ic_std": row[8],
+                "rank_ic_mean": row[9],
+                "rank_ic_std": row[10],
+                "ic_ir": row[11],
+                "rank_ic_ir": row[12],
+            }
+            for row in rows
+        ]
+
+    def list_latest_factor_monotonicity_results(
+        self,
+        *,
+        regime: str | None = None,
+        limit: int = 20,
+    ) -> list[dict]:
+        query = """
+            with latest as (
+                select run_id
+                from factor_monotonicity_result
+                order by created_at desc, run_id desc
+                limit 1
+            )
+            select factor_monotonicity_result.run_id, factor_monotonicity_result.regime, factor_monotonicity_result.regime_detail, factor_monotonicity_result.window_size, factor_monotonicity_result.field, factor_monotonicity_result.quantiles, factor_monotonicity_result.sample_count,
+                   factor_monotonicity_result.bucket_returns_json, factor_monotonicity_result.top_bottom_spread, factor_monotonicity_result.monotonic_direction, factor_monotonicity_result.monotonic_passed, factor_monotonicity_result.eval_score
+            from factor_monotonicity_result, latest
+            where factor_monotonicity_result.run_id = latest.run_id
+        """
+        params: list[object] = []
+        if regime is not None:
+            query += " and regime = ?"
+            params.append(regime)
+        query += " order by eval_score desc, abs(top_bottom_spread) desc, sample_count desc, field limit ?"
+        params.append(limit)
+        with self.connect(read_only=True) as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [
+            {
+                "run_id": row[0],
+                "regime": row[1],
+                "regime_detail": row[2],
+                "window_size": row[3],
+                "field": row[4],
+                "quantiles": row[5],
+                "sample_count": row[6],
+                "bucket_returns": json.loads(row[7]),
+                "top_bottom_spread": row[8],
+                "monotonic_direction": row[9],
+                "monotonic_passed": row[10],
+                "eval_score": row[11],
+            }
+            for row in rows
+        ]
+
+    def list_latest_factor_whitelist(
+        self,
+        *,
+        regime: str | None = None,
+        eligible_only: bool = False,
+        limit: int = 20,
+    ) -> list[dict]:
+        query = """
+            with latest as (
+                select run_id
+                from factor_whitelist_snapshot
+                order by created_at desc, run_id desc
+                limit 1
+            )
+            select factor_whitelist_snapshot.run_id, factor_whitelist_snapshot.regime, factor_whitelist_snapshot.regime_detail, factor_whitelist_snapshot.field,
+                   factor_whitelist_snapshot.window_hit_count, factor_whitelist_snapshot.stable_window_count,
+                   factor_whitelist_snapshot.best_discovery_score, factor_whitelist_snapshot.avg_discovery_score,
+                   factor_whitelist_snapshot.best_big_move_rate_3d, factor_whitelist_snapshot.best_rank_ic_mean,
+                   factor_whitelist_snapshot.avg_rank_ic_mean, factor_whitelist_snapshot.best_rank_ic_ir,
+                   factor_whitelist_snapshot.monotonic_pass_count, factor_whitelist_snapshot.best_monotonic_score,
+                   factor_whitelist_snapshot.whitelist_score, factor_whitelist_snapshot.status,
+                   factor_whitelist_snapshot.eligible
+            from factor_whitelist_snapshot, latest
+            where factor_whitelist_snapshot.run_id = latest.run_id
+        """
+        params: list[object] = []
+        if regime is not None:
+            query += " and regime = ?"
+            params.append(regime)
+        if eligible_only:
+            query += " and eligible = true"
+        query += " order by eligible desc, whitelist_score desc, best_discovery_score desc, stable_window_count desc, field limit ?"
+        params.append(limit)
+        with self.connect(read_only=True) as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [
+            {
+                "run_id": row[0],
+                "regime": row[1],
+                "regime_detail": row[2],
+                "field": row[3],
+                "window_hit_count": row[4],
+                "stable_window_count": row[5],
+                "best_discovery_score": row[6],
+                "avg_discovery_score": row[7],
+                "best_big_move_rate_3d": row[8],
+                "best_rank_ic_mean": row[9],
+                "avg_rank_ic_mean": row[10],
+                "best_rank_ic_ir": row[11],
+                "monotonic_pass_count": row[12],
+                "best_monotonic_score": row[13],
+                "whitelist_score": row[14],
+                "status": row[15],
+                "eligible": row[16],
             }
             for row in rows
         ]
@@ -1073,7 +1874,7 @@ class DuckDbStorage:
                 limit 1
             )
             select factor_combo_result.run_id, factor_combo_result.combo_id, factor_combo_result.regime,
-                   factor_combo_result.window_size, factor_combo_result.fields_json,
+                   factor_combo_result.regime_detail, factor_combo_result.window_size, factor_combo_result.fields_json,
                    factor_combo_result.sample_count, factor_combo_result.hit_rate_3d,
                    factor_combo_result.big_move_rate_3d, factor_combo_result.avg_return_3d,
                    factor_combo_result.avg_max_return_3d, factor_combo_result.max_drawdown_3d,
@@ -1094,16 +1895,17 @@ class DuckDbStorage:
                 "run_id": row[0],
                 "combo_id": row[1],
                 "regime": row[2],
-                "window_size": row[3],
-                "fields": json.loads(row[4]),
-                "sample_count": row[5],
-                "hit_rate_3d": row[6],
-                "big_move_rate_3d": row[7],
-                "avg_return_3d": row[8],
-                "avg_max_return_3d": row[9],
-                "max_drawdown_3d": row[10],
-                "discovery_score": row[11],
-                "lift_vs_single": row[12],
+                "regime_detail": row[3],
+                "window_size": row[4],
+                "fields": json.loads(row[5]),
+                "sample_count": row[6],
+                "hit_rate_3d": row[7],
+                "big_move_rate_3d": row[8],
+                "avg_return_3d": row[9],
+                "avg_max_return_3d": row[10],
+                "max_drawdown_3d": row[11],
+                "discovery_score": row[12],
+                "lift_vs_single": row[13],
             }
             for row in rows
         ]
@@ -1122,7 +1924,7 @@ class DuckDbStorage:
                 limit 1
             )
             select rule_variant_result.run_id, rule_variant_result.variant_id, rule_variant_result.combo_id,
-                   rule_variant_result.regime, rule_variant_result.logic_id, rule_variant_result.variant_type,
+                   rule_variant_result.regime, rule_variant_result.regime_detail, rule_variant_result.logic_id, rule_variant_result.variant_type, rule_variant_result.ranking_type,
                    rule_variant_result.sample_count, rule_variant_result.hit_rate_3d,
                    rule_variant_result.big_move_rate_3d, rule_variant_result.avg_return_3d,
                    rule_variant_result.avg_max_return_3d, rule_variant_result.max_drawdown_3d,
@@ -1145,17 +1947,19 @@ class DuckDbStorage:
                 "variant_id": row[1],
                 "combo_id": row[2],
                 "regime": row[3],
-                "logic_id": row[4],
-                "variant_type": row[5],
-                "sample_count": row[6],
-                "hit_rate_3d": row[7],
-                "big_move_rate_3d": row[8],
-                "avg_return_3d": row[9],
-                "avg_max_return_3d": row[10],
-                "max_drawdown_3d": row[11],
-                "top3_quality_score": row[12],
-                "top5_quality_score": row[13],
-                "discovery_score": row[14],
+                "regime_detail": row[4],
+                "logic_id": row[5],
+                "variant_type": row[6],
+                "ranking_type": row[7],
+                "sample_count": row[8],
+                "hit_rate_3d": row[9],
+                "big_move_rate_3d": row[10],
+                "avg_return_3d": row[11],
+                "avg_max_return_3d": row[12],
+                "max_drawdown_3d": row[13],
+                "top3_quality_score": row[14],
+                "top5_quality_score": row[15],
+                "discovery_score": row[16],
             }
             for row in rows
         ]

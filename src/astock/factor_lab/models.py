@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 
 class FactorBucketStat(BaseModel):
     regime: str
+    regime_detail: str | None = None
     window_size: int
     field: str
     min_value: float | None = None
@@ -18,11 +19,63 @@ class FactorBucketStat(BaseModel):
     discovery_score: float
 
 
+class FactorWhitelistEntry(BaseModel):
+    regime: str
+    regime_detail: str | None = None
+    field: str
+    window_hit_count: int
+    stable_window_count: int
+    best_discovery_score: float
+    avg_discovery_score: float
+    best_big_move_rate_3d: float
+    best_rank_ic_mean: float = 0.0
+    avg_rank_ic_mean: float = 0.0
+    best_rank_ic_ir: float = 0.0
+    monotonic_pass_count: int = 0
+    best_monotonic_score: float = 0.0
+    whitelist_score: float = 0.0
+    status: str
+    eligible: bool
+
+
+class FactorIcResult(BaseModel):
+    run_id: str = ""
+    regime: str
+    regime_detail: str | None = None
+    window_size: int
+    field: str
+    date_count: int
+    sample_count: int
+    ic_mean: float
+    ic_std: float
+    rank_ic_mean: float
+    rank_ic_std: float
+    ic_ir: float
+    rank_ic_ir: float
+
+
+class FactorMonotonicityResult(BaseModel):
+    run_id: str = ""
+    regime: str
+    regime_detail: str | None = None
+    window_size: int
+    field: str
+    quantiles: int
+    sample_count: int
+    bucket_returns: list[float] = Field(default_factory=list)
+    top_bottom_spread: float
+    monotonic_direction: str
+    monotonic_passed: bool
+    eval_score: float
+
+
 class FactorComboResult(BaseModel):
     combo_id: str
     regime: str
+    regime_detail: str | None = None
     window_size: int
     fields: list[str] = Field(default_factory=list)
+    match_threshold: float = 0.0
     sample_count: int
     hit_rate_3d: float
     big_move_rate_3d: float
@@ -37,8 +90,10 @@ class RuleVariantResult(BaseModel):
     variant_id: str
     combo_id: str
     regime: str
+    regime_detail: str | None = None
     logic_id: str
     variant_type: str
+    ranking_type: str = "factor_mix"
     sample_count: int
     hit_rate_3d: float
     big_move_rate_3d: float
@@ -71,6 +126,7 @@ class DiscoveredLogicCandidate(BaseModel):
     logic_id: str
     logic_name: str
     regime: str
+    regime_detail: str | None = None
     sample_count: int
     hit_rate_3d: float
     big_move_rate_3d: float
@@ -84,6 +140,8 @@ class DiscoveredLogicCandidate(BaseModel):
     factor_fields: list[str] = Field(default_factory=list)
     parent_combo_id: str | None = None
     variant_type: str = "baseline"
+    ranking_type: str = "factor_mix"
+    lifecycle_state: str = "candidate"
     top3_quality_score: float | None = None
     top5_quality_score: float | None = None
     replay_quality_passed: bool = False

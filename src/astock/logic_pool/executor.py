@@ -13,6 +13,7 @@ def enrich_feature_frame(frame: pl.DataFrame) -> pl.DataFrame:
         .with_columns(
             [
                 pl.col("close").shift(1).over("symbol").alias("prev_close"),
+                pl.col("open").shift(1).over("symbol").alias("prev_open"),
                 pl.col("close").shift(3).over("symbol").alias("close_3d_ago"),
                 pl.col("close").shift(5).over("symbol").alias("close_5d_ago"),
                 pl.col("close").shift(10).over("symbol").alias("close_10d_ago"),
@@ -20,6 +21,13 @@ def enrich_feature_frame(frame: pl.DataFrame) -> pl.DataFrame:
                 pl.col("low").rolling_min(window_size=3).shift(1).over("symbol").alias("recent_3d_low"),
                 pl.col("high").rolling_max(window_size=5).shift(1).over("symbol").alias("recent_5d_high"),
                 pl.col("low").rolling_min(window_size=5).shift(1).over("symbol").alias("recent_5d_low"),
+                pl.col("volume").rolling_mean(window_size=5).shift(1).over("symbol").alias("avg_volume_5d"),
+                pl.col("turnover").rolling_mean(window_size=5).shift(1).over("symbol").alias("avg_turnover_5d"),
+                ((((pl.col("high") - pl.col("low")) / pl.col("close")) * 100))
+                .rolling_mean(window_size=5)
+                .shift(1)
+                .over("symbol")
+                .alias("avg_intraday_range_5d"),
                 pl.col("close").rolling_mean(window_size=20).over("symbol").alias("ma20"),
             ]
         )
@@ -41,6 +49,12 @@ def enrich_feature_frame(frame: pl.DataFrame) -> pl.DataFrame:
                 (((pl.col("ma5") / pl.col("ma10")) - 1) * 100).alias("ma5_vs_ma10_pct"),
                 ((((pl.col("high") - pl.col("low")) / pl.col("close")) * 100)).alias("intraday_range_pct"),
                 ((((pl.col("close") - pl.col("open")) / pl.col("open")) * 100)).alias("body_pct"),
+                (((pl.col("open") / pl.col("prev_close")) - 1) * 100).alias("gap_pct"),
+                (((pl.col("close") / pl.col("recent_5d_high")) - 1) * 100).alias("breakout_vs_5d_high_pct"),
+                (((pl.col("close") - pl.col("low")) / (pl.col("high") - pl.col("low") + 1e-6)) * 100).alias("close_in_day_range_pct"),
+                (pl.col("volume") / (pl.col("avg_volume_5d") + 1e-6)).alias("volume_ratio_5d"),
+                (pl.col("turnover") / (pl.col("avg_turnover_5d") + 1e-6)).alias("turnover_ratio_5d"),
+                ((((pl.col("high") - pl.col("low")) / pl.col("close")) * 100) / (pl.col("avg_intraday_range_5d") + 1e-6)).alias("range_expansion_5d"),
                 pl.col("high").shift(-1).over("symbol").alias("future_high_1d"),
                 pl.col("low").shift(-1).over("symbol").alias("future_low_1d"),
                 pl.max_horizontal(
@@ -132,6 +146,40 @@ def _apply_generic_conditions(frame: pl.DataFrame, conditions: list[dict]) -> pl
     return filtered
 
 
+def _soft_condition_score_expr(condition: dict) -> pl.Expr:
+    field = condition["field"]
+    min_value = condition.get("min")
+    max_value = condition.get("max")
+    if min_value is None and max_value is None:
+        return pl.lit(1.0)
+    if min_value is None:
+        min_value = max_value
+    if max_value is None:
+        max_value = min_value
+    span = max(float(max_value) - float(min_value), 0.01)
+    distance = (
+        pl.when(pl.col(field) < float(min_value))
+        .then(float(min_value) - pl.col(field))
+        .when(pl.col(field) > float(max_value))
+        .then(pl.col(field) - float(max_value))
+        .otherwise(0.0)
+    )
+    return (
+        pl.when(distance <= 0.0)
+        .then(1.0)
+        .otherwise((1.0 - (distance / span)).clip(0.0, 1.0))
+    )
+
+
+def _soft_match_expr(conditions: list[dict]) -> pl.Expr:
+    if not conditions:
+        return pl.lit(1.0)
+    expr = pl.lit(0.0)
+    for condition in conditions:
+        expr = expr + _soft_condition_score_expr(condition)
+    return expr / float(len(conditions))
+
+
 def _generic_score_expr(score_weights: list[dict]) -> pl.Expr:
     if not score_weights:
         return pl.lit(0.0)
@@ -143,9 +191,15 @@ def _generic_score_expr(score_weights: list[dict]) -> pl.Expr:
 
 def _execute_generic_logic(frame: pl.DataFrame, logic: LogicSpec) -> pl.DataFrame:
     conditions = logic.entry_rule.get("conditions", [])
+    soft_conditions = logic.entry_rule.get("soft_conditions", [])
+    match_threshold = logic.entry_rule.get("match_threshold")
     score_weights = logic.entry_rule.get("score_weights", [])
     signal_name = logic.entry_rule.get("signal_name", f"{logic.logic_id}_signal")
     filtered = _apply_generic_conditions(frame, conditions)
+    if soft_conditions:
+        filtered = filtered.with_columns(_soft_match_expr(soft_conditions).alias("_match_score"))
+        if match_threshold is not None:
+            filtered = filtered.filter(pl.col("_match_score") >= float(match_threshold))
     if filtered.is_empty():
         return pl.DataFrame()
     return _base_output(filtered, signal_name, _generic_score_expr(score_weights))

@@ -167,6 +167,28 @@ def _fetch_indicator_frame(
     return pl.concat(frames, how="vertical") if frames else pl.DataFrame()
 
 
+def _fetch_profile_frame(
+    client: AksMcpRestClient,
+    symbols: list[str],
+    *,
+    as_of_date: date,
+    chunk_size: int,
+) -> pl.DataFrame:
+    frames: list[pl.DataFrame] = []
+    effective_chunk_size = max(1, min(chunk_size, settings.api_max_rows_per_request))
+    fields = ["symbol", "name", "industry", "listing_date"]
+    for chunk in _chunked(symbols, effective_chunk_size):
+        payload = client.stock_profile(
+            symbol=chunk,
+            as_of_date=_date_str(as_of_date),
+            fields=fields,
+        )
+        frame = client.rows_frame(payload)
+        if not frame.is_empty():
+            frames.append(frame)
+    return pl.concat(frames, how="vertical") if frames else pl.DataFrame()
+
+
 def build_feature_frame(
     client: AksMcpRestClient,
     *,
@@ -179,6 +201,7 @@ def build_feature_frame(
     if hist.is_empty():
         return hist
     indicators = _fetch_indicator_frame(client, symbols, start_date=start_date, end_date=end_date, chunk_size=chunk_size)
+    profiles = _fetch_profile_frame(client, symbols, as_of_date=end_date, chunk_size=chunk_size)
     if indicators.is_empty():
         merged = hist.with_columns(
             [
@@ -194,8 +217,48 @@ def build_feature_frame(
         )
     else:
         merged = hist.join(indicators, on=["symbol", "trade_date"], how="left")
+    if not profiles.is_empty():
+        profile_frame = profiles.select(
+            [
+                "symbol",
+                pl.col("industry").fill_null("UNKNOWN").alias("industry"),
+            ]
+        ).unique(subset=["symbol"])
+        merged = merged.join(profile_frame, on="symbol", how="left")
+    else:
+        merged = merged.with_columns(pl.lit("UNKNOWN").alias("industry"))
     merged = merged.with_columns(pl.col("trade_date").cast(pl.Date))
-    return enrich_feature_frame(merged)
+    enriched = enrich_feature_frame(merged)
+    if enriched.is_empty():
+        return enriched
+    industry_frame = (
+        enriched.group_by(["trade_date", "industry"])
+        .agg(
+            [
+                pl.col("ret_1d").mean().alias("industry_ret_1d"),
+                pl.col("ret_3d").mean().alias("industry_ret_3d"),
+                pl.col("ret_5d").mean().alias("industry_ret_5d"),
+                pl.col("ret_10d").mean().alias("industry_ret_10d"),
+                (pl.col("ret_1d") >= 2).mean().alias("industry_strong_rate"),
+                (pl.col("close") > pl.col("ma5")).mean().alias("industry_above_ma5_rate"),
+                pl.col("body_pct").mean().alias("industry_body_pct"),
+                pl.col("volume_ratio_5d").mean().alias("industry_volume_ratio_5d"),
+            ]
+        )
+    )
+    return (
+        enriched.join(industry_frame, on=["trade_date", "industry"], how="left")
+        .with_columns(
+            [
+                (pl.col("ret_1d") - pl.col("industry_ret_1d")).alias("excess_ret_1d"),
+                (pl.col("ret_3d") - pl.col("industry_ret_3d")).alias("excess_ret_3d"),
+                (pl.col("ret_5d") - pl.col("industry_ret_5d")).alias("excess_ret_5d"),
+                (pl.col("ret_10d") - pl.col("industry_ret_10d")).alias("excess_ret_10d"),
+                (pl.col("body_pct") - pl.col("industry_body_pct")).alias("excess_body_pct"),
+                (pl.col("volume_ratio_5d") - pl.col("industry_volume_ratio_5d")).alias("excess_volume_ratio_5d"),
+            ]
+        )
+    )
 
 
 def _limit_hits_per_day(frame: pl.DataFrame, *, per_day: int) -> pl.DataFrame:

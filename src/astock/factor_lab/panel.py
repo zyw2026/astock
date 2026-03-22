@@ -24,6 +24,38 @@ def _attach_regime(frame: pl.DataFrame, regime_map: dict[date, str]) -> pl.DataF
     return frame.join(regime_frame, on="trade_date", how="left")
 
 
+def _attach_regime_detail(frame: pl.DataFrame) -> pl.DataFrame:
+    if frame.is_empty():
+        return frame
+    summary = (
+        frame.group_by(["trade_date", "regime"])
+        .agg(
+            [
+                pl.col("ret_1d").mean().alias("avg_ret_1d"),
+                pl.col("ret_5d").mean().alias("avg_ret_5d"),
+                (pl.col("ret_1d") >= 2).mean().alias("strong_rate"),
+                (pl.col("close") > pl.col("ma5")).mean().alias("above_ma5_rate"),
+            ]
+        )
+        .with_columns(
+            [
+                pl.when((pl.col("regime") == "rotation") & (pl.col("avg_ret_1d") >= 0.6) & (pl.col("strong_rate") >= 0.16) & (pl.col("above_ma5_rate") >= 0.58))
+                .then(pl.lit("rotation_strong"))
+                .when(pl.col("regime") == "rotation")
+                .then(pl.lit("rotation_mixed"))
+                .when((pl.col("regime") == "weak_rotation") & (pl.col("avg_ret_1d") >= -0.2) & (pl.col("above_ma5_rate") >= 0.45))
+                .then(pl.lit("weak_rotation_repair"))
+                .when(pl.col("regime") == "weak_rotation")
+                .then(pl.lit("weak_rotation_drift"))
+                .otherwise(pl.col("regime"))
+                .alias("regime_detail")
+            ]
+        )
+        .select(["trade_date", "regime", "regime_detail"])
+    )
+    return frame.join(summary, on=["trade_date", "regime"], how="left")
+
+
 def build_discovery_panel(
     client: AksMcpRestClient,
     *,
@@ -51,6 +83,7 @@ def build_discovery_panel(
     for trade_date, regime in fallback_map.items():
         regime_map.setdefault(trade_date, regime)
     panel = _attach_regime(panel, regime_map)
+    panel = _attach_regime_detail(panel)
     panel = panel.with_columns(
         [
             pl.when(pl.col("next_3d_max_return") >= 5.0).then(1).otherwise(0).alias("is_big_move_3d"),
@@ -62,4 +95,3 @@ def build_discovery_panel(
         ]
     )
     return panel, symbols
-
