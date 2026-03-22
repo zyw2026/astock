@@ -106,6 +106,16 @@ create table if not exists discovered_logic_candidate (
     spec_json varchar not null,
     approved_for_validation boolean not null,
     promoted_to_runtime boolean not null default false,
+    regime_detail varchar,
+    parent_combo_id varchar,
+    variant_type varchar default 'baseline',
+    ranking_type varchar default 'factor_mix',
+    lifecycle_state varchar default 'candidate',
+    top3_quality_score double,
+    top5_quality_score double,
+    replay_quality_passed boolean default false,
+    recent_top5_quality_score double,
+    recent_replay_quality_passed boolean default false,
     created_at timestamp default current_timestamp
 );
 
@@ -392,6 +402,8 @@ MIGRATION_SQL = (
     "alter table discovered_logic_candidate add column if not exists top3_quality_score double;",
     "alter table discovered_logic_candidate add column if not exists top5_quality_score double;",
     "alter table discovered_logic_candidate add column if not exists replay_quality_passed boolean default false;",
+    "alter table discovered_logic_candidate add column if not exists recent_top5_quality_score double;",
+    "alter table discovered_logic_candidate add column if not exists recent_replay_quality_passed boolean default false;",
     "alter table runtime_discovered_logic add column if not exists discovery_run_id varchar;",
     "alter table factor_signal_profile add column if not exists regime_detail varchar;",
     "alter table factor_whitelist_snapshot add column if not exists regime_detail varchar;",
@@ -785,8 +797,9 @@ class DuckDbStorage:
                     candidate_id, discovery_run_id, source, logic_id, logic_name, regime, regime_detail,
                     sample_count, hit_rate_3d, big_move_rate_3d, avg_return_3d, avg_max_return_3d,
                     max_drawdown_3d, discovery_score, spec_json, approved_for_validation, promoted_to_runtime,
-                    parent_combo_id, variant_type, ranking_type, lifecycle_state, top3_quality_score, top5_quality_score, replay_quality_passed
-                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    parent_combo_id, variant_type, ranking_type, lifecycle_state, top3_quality_score, top5_quality_score, replay_quality_passed,
+                    recent_top5_quality_score, recent_replay_quality_passed
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     (
@@ -814,6 +827,8 @@ class DuckDbStorage:
                         row.get("top3_quality_score"),
                         row.get("top5_quality_score"),
                         1 if row.get("replay_quality_passed", False) else 0,
+                        row.get("recent_top5_quality_score"),
+                        1 if row.get("recent_replay_quality_passed", False) else 0,
                     )
                     for row in rows
                 ],
@@ -853,6 +868,8 @@ class DuckDbStorage:
                 top3_quality_score,
                 top5_quality_score,
                 replay_quality_passed,
+                recent_top5_quality_score,
+                recent_replay_quality_passed,
                 exists(
                     select 1
                     from runtime_discovered_logic
@@ -906,8 +923,10 @@ class DuckDbStorage:
                 "top3_quality_score": row[19],
                 "top5_quality_score": row[20],
                 "replay_quality_passed": row[21],
-                "promoted_to_runtime": row[22],
-                "created_at": row[23],
+                "recent_top5_quality_score": row[22],
+                "recent_replay_quality_passed": row[23],
+                "promoted_to_runtime": row[24],
+                "created_at": row[25],
             }
             for row in rows
         ]
@@ -971,11 +990,27 @@ class DuckDbStorage:
                       and approved_for_validation = true
                       and replay_quality_passed = true
                     order by discovery_score desc, sample_count desc, logic_id
-                    limit ?
                     """,
-                    (limit,),
                 ).fetchall()
-                ids = [(row[0], row[1]) for row in rows]
+                ids: list[tuple[str, str]] = []
+                for candidate_id, discovery_run_id in rows:
+                    row = conn.execute(
+                        """
+                        select logic_id, recent_replay_quality_passed
+                        from discovered_logic_candidate
+                        where candidate_id = ? and discovery_run_id = ?
+                        limit 1
+                        """,
+                        (candidate_id, discovery_run_id),
+                    ).fetchone()
+                    if not row:
+                        continue
+                    logic_id, recent_replay_quality_passed = row
+                    recent_validation = self.evaluate_recent_validation_quality(logic_id=logic_id, conn=conn)
+                    if recent_replay_quality_passed or recent_validation.get("passed", False):
+                        ids.append((candidate_id, discovery_run_id))
+                    if len(ids) >= limit:
+                        break
                 if not ids:
                     return 0
                 for candidate_id, discovery_run_id in ids:
@@ -1004,6 +1039,107 @@ class DuckDbStorage:
                 return len(ids)
         return 0
 
+    def evaluate_recent_validation_quality(
+        self,
+        *,
+        logic_id: str,
+        trade_days: int | None = None,
+        top_k: int | None = None,
+        conn: duckdb.DuckDBPyConnection | None = None,
+    ) -> dict:
+        trade_days = trade_days or settings.recent_replay_quality_trade_days
+        top_k = top_k or settings.replay_quality_top_k
+        owns_connection = conn is None
+        conn = conn or self.connect(read_only=True)
+        try:
+            dates = [
+                row[0]
+                for row in conn.execute(
+                    """
+                    select distinct trade_date
+                    from logic_signal_hit
+                    where logic_id = ?
+                    order by trade_date desc
+                    limit ?
+                    """,
+                    (logic_id, trade_days),
+                ).fetchall()
+            ]
+            if not dates:
+                return {
+                    "logic_id": logic_id,
+                    "sample_count": 0,
+                    "topk_quality_score": 0.0,
+                    "passed": False,
+                }
+            placeholders = ",".join(["?"] * len(dates))
+            row = conn.execute(
+                f"""
+                with ranked as (
+                    select
+                        trade_date,
+                        symbol,
+                        trigger_score,
+                        next_3d_return,
+                        next_3d_max_return,
+                        max_drawdown_3d,
+                        row_number() over (
+                            partition by trade_date
+                            order by trigger_score desc nulls last, symbol
+                        ) as rk
+                    from logic_signal_hit
+                    where logic_id = ?
+                      and trade_date in ({placeholders})
+                )
+                select
+                    count(*) as sample_count,
+                    avg(case when next_3d_return > 0 then 1.0 else 0.0 end) as hit_rate_3d,
+                    avg(case when next_3d_max_return >= 5.0 then 1.0 else 0.0 end) as big_move_rate_3d,
+                    avg(next_3d_return) as avg_n3d,
+                    avg(next_3d_max_return) as avg_n3d_max,
+                    avg(max_drawdown_3d) as avg_n3d_dd
+                from ranked
+                where rk <= ?
+                """,
+                [logic_id, *dates, top_k],
+            ).fetchone()
+        finally:
+            if owns_connection:
+                conn.close()
+        sample_count, hit_rate_3d, big_move_rate_3d, avg_n3d, avg_n3d_max, avg_n3d_dd = row
+        sample_count = int(sample_count or 0)
+        hit_rate_3d = float(hit_rate_3d or 0.0)
+        big_move_rate_3d = float(big_move_rate_3d or 0.0)
+        avg_n3d = float(avg_n3d or 0.0)
+        avg_n3d_max = float(avg_n3d_max or 0.0)
+        avg_n3d_dd = float(avg_n3d_dd or 0.0)
+        topk_quality_score = round(
+            max(min(hit_rate_3d, 1.0), 0.0) * 18.0
+            + max(min(big_move_rate_3d, 1.0), 0.0) * 20.0
+            + max(min(avg_n3d / 3.0, 1.0), -1.0) * 18.0
+            + max(min(avg_n3d_max / 6.0, 1.0), 0.0) * 18.0
+            + max(min((4.5 + avg_n3d_dd) / 4.5, 1.0), 0.0) * 6.0,
+            2,
+        )
+        passed = (
+            sample_count >= max(5, settings.discovery_min_sample_count - 3)
+            and avg_n3d >= 0.0
+            and avg_n3d_max >= 2.5
+            and avg_n3d_dd >= -4.0
+            and topk_quality_score >= 35.0
+        )
+        return {
+            "logic_id": logic_id,
+            "sample_count": sample_count,
+            "hit_rate_3d": hit_rate_3d,
+            "big_move_rate_3d": big_move_rate_3d,
+            "avg_n3d": avg_n3d,
+            "avg_n3d_max": avg_n3d_max,
+            "avg_n3d_dd": avg_n3d_dd,
+            "topk_quality_score": topk_quality_score,
+            "passed": passed,
+        }
+
     def apply_candidate_lifecycle_for_run(self, *, discovery_run_id: str) -> dict:
         with self.connect() as conn:
             runtime_count = int(
@@ -1030,7 +1166,8 @@ class DuckDbStorage:
                 where discovery_run_id = ?
                   and lifecycle_state <> 'runtime'
                   and (
-                      approved_for_validation = true
+                      (approved_for_validation = true and replay_quality_passed = true)
+                      or recent_replay_quality_passed = true
                       or coalesce(top5_quality_score, 0) >= 55
                   )
                 """,
@@ -1111,7 +1248,7 @@ class DuckDbStorage:
                   on d.candidate_id = r.candidate_id
                  and d.discovery_run_id = r.discovery_run_id
                 where d.approved_for_validation = false
-                   or (? and d.replay_quality_passed = false)
+                   or (? and (d.replay_quality_passed = false or d.recent_replay_quality_passed = false))
                 """,
                 (require_replay_passed,),
             ).fetchone()
@@ -1126,7 +1263,7 @@ class DuckDbStorage:
                       and d.discovery_run_id = runtime_discovered_logic.discovery_run_id
                       and (
                           d.approved_for_validation = false
-                          or (? and d.replay_quality_passed = false)
+                          or (? and (d.replay_quality_passed = false or d.recent_replay_quality_passed = false))
                       )
                 )
                 """,
@@ -1137,7 +1274,7 @@ class DuckDbStorage:
                 update discovered_logic_candidate
                 set lifecycle_state = 'retired'
                 where approved_for_validation = false
-                   or (? and replay_quality_passed = false)
+                   or (? and (replay_quality_passed = false or recent_replay_quality_passed = false))
                 """,
                 (require_replay_passed,),
             )

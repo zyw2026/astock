@@ -118,6 +118,7 @@ def run_discovery(
         [item.model_dump(mode="json") for item in candidates],
         discovery_run_id=discovery_run_id,
     )
+    lifecycle = storage.apply_candidate_lifecycle_for_run(discovery_run_id=discovery_run_id)
     return {
         "discovery_run_id": discovery_run_id,
         "symbol_count": len(symbols),
@@ -135,4 +136,5 @@ def run_discovery(
         "variant_rows": [item.model_dump(mode="json") for item in variant_results],
         "replay_quality_rows": [item.model_dump(mode="json") for item in replay_quality],
         "rows": [item.model_dump(mode="json") for item in candidates],
+        "lifecycle": lifecycle,
     }

@@ -37,6 +37,7 @@ class Settings(BaseSettings):
     discovery_combo_top_n: int = Field(default=12)
     replay_quality_trade_days: int = Field(default=20)
     replay_quality_top_k: int = Field(default=5)
+    recent_replay_quality_trade_days: int = Field(default=8)
 
 
 settings = Settings()

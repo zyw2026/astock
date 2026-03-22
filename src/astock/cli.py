@@ -512,10 +512,12 @@ def show_discovered_logics(
     table.add_column("samples", justify="right")
     table.add_column("top3", justify="right")
     table.add_column("top5", justify="right")
+    table.add_column("recent5", justify="right")
     table.add_column("big_3d", justify="right")
     table.add_column("score", justify="right")
     table.add_column("approved")
     table.add_column("replay")
+    table.add_column("recent")
     table.add_column("runtime")
     for row in rows:
         table.add_row(
@@ -529,10 +531,12 @@ def show_discovered_logics(
             str(row["sample_count"]),
             f"{(row.get('top3_quality_score') or 0):.2f}",
             f"{(row.get('top5_quality_score') or 0):.2f}",
+            f"{(row.get('recent_top5_quality_score') or 0):.2f}",
             f"{(row['big_move_rate_3d'] or 0):.2%}",
             f"{(row['discovery_score'] or 0):.2f}",
             "yes" if row["approved_for_validation"] else "no",
             "yes" if row.get("replay_quality_passed") else "no",
+            "yes" if row.get("recent_replay_quality_passed") else "no",
             "yes" if row["promoted_to_runtime"] else "no",
         )
     console.print(table)

@@ -920,6 +920,7 @@ def _compute_replay_quality(
     fields: list[str],
     ranking_type: str,
 ) -> ReplayQualityResult:
+    filtered = _window_frame(filtered, trade_days)
     if filtered.is_empty():
         return ReplayQualityResult(
             run_id="",
@@ -971,12 +972,17 @@ def _compute_replay_quality(
         + max(min((4.5 + metrics["max_drawdown_3d"]) / 4.5, 1.0), 0.0) * 3.0,
         2,
     )
+    is_recent_window = trade_days <= settings.recent_replay_quality_trade_days
+    min_sample_count = max(5, settings.discovery_min_sample_count - 3) if is_recent_window else settings.discovery_min_sample_count
+    min_avg_n3d = 0.0 if is_recent_window else 0.5
+    min_avg_max = 2.5 if is_recent_window else 3.0
+    min_score = settings.discovery_min_score - 3.0 if is_recent_window else settings.discovery_min_score
     passed = (
-        metrics["sample_count"] >= settings.discovery_min_sample_count
-        and metrics["avg_return_3d"] >= 0.5
-        and metrics["avg_max_return_3d"] >= 3.0
+        metrics["sample_count"] >= min_sample_count
+        and metrics["avg_return_3d"] >= min_avg_n3d
+        and metrics["avg_max_return_3d"] >= min_avg_max
         and metrics["max_drawdown_3d"] >= -4.0
-        and topk_quality_score >= settings.discovery_min_score
+        and topk_quality_score >= min_score
     )
     return ReplayQualityResult(
         run_id="",
@@ -1020,7 +1026,7 @@ def _compute_replay_quality_with_fallback(
     )
     if primary.sample_count >= settings.discovery_min_sample_count:
         return primary
-    fallback = _apply_hard_conditions(regime_frame, hard_conditions)
+    fallback = _apply_hard_conditions(_window_frame(regime_frame, trade_days), hard_conditions)
     fallback = fallback.with_columns(_soft_match_expr(soft_conditions).alias("_match_score")).filter(
         pl.col("_match_score") >= match_threshold
     )
@@ -1168,6 +1174,19 @@ def analyze_rule_variants(
                         )
                         for top_k in top_n_eval
                     ]
+                    recent_top5 = _compute_replay_quality_with_fallback(
+                        detail_filtered=filtered,
+                        regime_frame=replay_scoped,
+                        hard_conditions=hard_conditions,
+                        soft_conditions=conditions,
+                        match_threshold=match_threshold,
+                        logic_id=spec.logic_id,
+                        logic_name=spec.name,
+                        trade_days=settings.recent_replay_quality_trade_days,
+                        top_k=5,
+                        fields=combo.fields,
+                        ranking_type=ranking_type,
+                    )
                     top3 = next((item for item in quality_rows if item.top_k == 3), None)
                     top5 = next((item for item in quality_rows if item.top_k == 5), None)
                     variant = RuleVariantResult(
@@ -1209,10 +1228,13 @@ def analyze_rule_variants(
                         top3_quality_score=variant.top3_quality_score,
                         top5_quality_score=variant.top5_quality_score,
                         replay_quality_passed=all(item.passed for item in quality_rows),
+                        recent_top5_quality_score=recent_top5.topk_quality_score,
+                        recent_replay_quality_passed=recent_top5.passed,
                         spec_json=json.dumps(spec.model_dump(mode="json"), ensure_ascii=False),
                     )
                     top5 = next((item for item in quality_rows if item.top_k == 5), None)
                     candidate.replay_quality_passed = bool(top5 and top5.passed)
+                    candidate.recent_replay_quality_passed = bool(recent_top5 and recent_top5.passed)
                     candidate.approved_for_validation = (
                         metrics["sample_count"] >= settings.discovery_min_sample_count
                         and (
@@ -1223,13 +1245,15 @@ def analyze_rule_variants(
                             or candidate.replay_quality_passed
                         )
                     )
-                    ranking_bundle.append((variant, candidate, quality_rows))
+                    ranking_bundle.append((variant, candidate, [*quality_rows, recent_top5]))
                 if not ranking_bundle:
                     continue
                 if regime == "weak_rotation":
                     ranking_bundle.sort(
                         key=lambda item: (
+                            item[1].recent_replay_quality_passed,
                             item[1].replay_quality_passed,
+                            item[1].recent_top5_quality_score or 0.0,
                             item[0].top5_quality_score,
                             item[0].big_move_rate_3d,
                             item[0].avg_max_return_3d,
@@ -1243,6 +1267,7 @@ def analyze_rule_variants(
                 else:
                     ranking_bundle.sort(
                         key=lambda item: (
+                            item[1].recent_replay_quality_passed,
                             item[1].replay_quality_passed,
                             item[0].top3_quality_score,
                             item[0].top5_quality_score,
@@ -1257,7 +1282,9 @@ def analyze_rule_variants(
             if regime == "weak_rotation":
                 variant_bundle.sort(
                     key=lambda item: (
+                        item[1].recent_replay_quality_passed,
                         item[1].replay_quality_passed,
+                        item[1].recent_top5_quality_score or 0.0,
                         item[0].top5_quality_score,
                         item[0].big_move_rate_3d,
                         item[0].avg_max_return_3d,
@@ -1271,6 +1298,7 @@ def analyze_rule_variants(
             else:
                 variant_bundle.sort(
                     key=lambda item: (
+                        item[1].recent_replay_quality_passed,
                         item[1].replay_quality_passed,
                         item[0].top3_quality_score,
                         item[0].top5_quality_score,
@@ -1285,7 +1313,9 @@ def analyze_rule_variants(
             candidates.append(best_candidate)
     candidates.sort(
         key=lambda item: (
+            item.recent_replay_quality_passed,
             item.replay_quality_passed,
+            item.recent_top5_quality_score or 0.0,
             item.top3_quality_score or 0.0,
             item.top5_quality_score or 0.0,
             item.discovery_score,

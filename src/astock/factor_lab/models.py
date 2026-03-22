@@ -145,6 +145,8 @@ class DiscoveredLogicCandidate(BaseModel):
     top3_quality_score: float | None = None
     top5_quality_score: float | None = None
     replay_quality_passed: bool = False
+    recent_top5_quality_score: float | None = None
+    recent_replay_quality_passed: bool = False
     spec_json: str
 
 

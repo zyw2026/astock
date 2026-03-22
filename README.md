@@ -16,6 +16,7 @@
 - 用历史数据验证逻辑在不同市场状态下的短线爆发率、风险收益比和稳定性
 - 沉淀一套“市场状态 -> 可靠逻辑 -> 当日候选股”的标准化流程
 - 输出可追溯、可复盘、可迭代的每日选股结果
+- 自动反推出当前状态下相对有效的策略，而不是追求长期固定不变的自动策略
 
 ## 核心流程
 
@@ -61,6 +62,8 @@
 - 观察：`fund_flow_reversal`、`weak_rotation_flat_reclaim`、`ma10_reclaim`、`weak_rotation_failed_break_reclaim`、`limit_up_repair`
 - 次观察：`leader_first_pullback`、`oversold_rebound`
 - 自动反推：当前已有 `1` 条 `weak_rotation` 自动策略进入运行时并进入最新快照；自动策略只作为增量，不直接等同于实盘主力策略
+  - 当前运行时自动策略：`auto_weak_rotation_repair_1_92fd9e5d`
+  - 当前口径：长窗口通过 + 当前状态近端有效，才允许进入 `runtime`
 
 ## 当前实现说明
 
@@ -88,6 +91,11 @@
   - 规则压缩
   - replay 验收
   - `runtime / watch / retired` 分流
+- 自动策略当前按“当前状态有效”分层：
+  - `candidate`：刚发现，尚未证明可用
+  - `watch`：长窗口或研究指标可用，但近端状态验证不足
+  - `runtime`：长窗口通过，且近端 `Top5` replay 或近端 validation 通过
+  - `retired`：失效或被更严格门槛清退
 - `show-discovery-loop` 用于查看最近一次自动研究循环的每轮结果
 - `rotation / weak_rotation` 在 discovery 中会进一步细分子状态，用于提升因子和组合的纯度
 - 自动候选当前会记录：
@@ -95,15 +103,17 @@
   - `variant_type`
   - `ranking_type`
   - `lifecycle_state`
-- `promote-discovered-logics` 只提升同时满足：
+- `promote-discovered-logics` 当前只提升同时满足：
   - `approved_for_validation`
   - `replay_quality_passed`
+  - 且 `recent replay` 或 `recent validation` 至少一条通过
   的候选
 - `rolling-discovery-eval` 用于验证自动反推链是否能在滚动窗口中稳定产出可用候选
-- 当前已验证跑出 `1` 条自动反推晋级策略：
+- 当前已验证跑出 `1` 条自动反推运行时策略：
   - `auto_weak_rotation_repair_1_92fd9e5d`
   - 来源主线：`weak_rotation_repair`
   - 核心组合：`pullback_from_5d_high_pct + excess_body_pct`
+  - 当前依赖“近端 validation 复核”进入 `runtime`
 - `show-selection` 当前会展示：
   - `logic_name`
   - `holding_days`
