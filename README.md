@@ -31,6 +31,7 @@
   - 当前 discovery 已支持 `rotation / weak_rotation` 子状态切分
   - 当前会对 `ranking_type` 做排序实验，再只保留最佳结果
   - 当前可按因子批次自动循环：验收因子、生成候选、分流到 `runtime / watch / retired`
+  - 当前已接入首批固定候选组合蓝图，用于约束 discovery 优先围绕短线低吸模板生成组合
 
 ## 市场状态与策略
 
@@ -59,7 +60,7 @@
 - 主力：`rotation_base_breakout`、`rotation_catchup`、`weak_rotation_dip_absorb`、`trend_pullback`
 - 观察：`fund_flow_reversal`、`weak_rotation_flat_reclaim`、`ma10_reclaim`、`weak_rotation_failed_break_reclaim`、`limit_up_repair`
 - 次观察：`leader_first_pullback`、`oversold_rebound`
-- 自动反推：只加载通过晋级门槛的候选，不直接等同于实盘主力策略
+- 自动反推：当前已有 `1` 条 `weak_rotation` 自动策略进入运行时并进入最新快照；自动策略只作为增量，不直接等同于实盘主力策略
 
 ## 当前实现说明
 
@@ -73,6 +74,13 @@
   - 排序实验结果
   - `Top3 / Top5` 回放质量
   - 最终候选策略
+- discovery 当前优先围绕首批固定候选组合蓝图生成组合，首批模板包括：
+  - 强势回踩确认
+  - 缩量平台回收
+  - 板块强势中的个股分歧低吸
+  - 未加速补涨启动
+  - 超额实体修复
+  - 波动收缩后弱转强
 - `seed-factor-pool` 会初始化自动研究循环的因子候选池
 - `auto-discovery-loop` 会按因子批次循环跑：
   - 因子验收
@@ -92,6 +100,10 @@
   - `replay_quality_passed`
   的候选
 - `rolling-discovery-eval` 用于验证自动反推链是否能在滚动窗口中稳定产出可用候选
+- 当前已验证跑出 `1` 条自动反推晋级策略：
+  - `auto_weak_rotation_repair_1_92fd9e5d`
+  - 来源主线：`weak_rotation_repair`
+  - 核心组合：`pullback_from_5d_high_pct + excess_body_pct`
 - `show-selection` 当前会展示：
   - `logic_name`
   - `holding_days`

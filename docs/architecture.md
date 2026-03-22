@@ -93,7 +93,7 @@ src/astock/
 4. `factor_lab` 依次输出：
    - 因子白名单
    - 单因子画像
-   - 组合增益结果
+   - 固定候选组合蓝图约束下的组合增益结果
    - baseline / narrow / wide 规则实验
    - `ranking_type` 排序实验
    - `Top3 / Top5` 回放质量
@@ -221,10 +221,12 @@ selection -> validation
 - `factor_lab` 的固定验收顺序是：
   - 因子白名单
   - 因子画像
+  - 固定候选组合蓝图
   - 组合增益
   - 规则宽窄实验
   - 排序实验
   - `Top3 / Top5` 回放质量
+- 自动反推组合默认优先命中固定候选组合蓝图，而不是直接做无约束全量组合搜索
 - `rotation / weak_rotation` 在 discovery 中允许继续细分子状态，子状态只能服务研究与候选筛选，不能直接替代运行时主状态
 - 自动反推候选进入运行时前，至少要满足：
   - `approved_for_validation = true`

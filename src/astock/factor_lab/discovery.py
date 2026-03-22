@@ -61,6 +61,7 @@ RANKING_TYPES: tuple[str, ...] = (
     "reclaim_bias",
     "pullback_absorb",
     "repair_confirm",
+    "burst_priority",
 )
 
 PRIORITY_FIELDS: frozenset[str] = frozenset(
@@ -71,12 +72,103 @@ PRIORITY_FIELDS: frozenset[str] = frozenset(
     }
 )
 
+COMBO_BLUEPRINTS: tuple[dict, ...] = (
+    {
+        "template_id": "trend_pullback_confirm",
+        "regimes": ("trend", "rotation"),
+        "regime_details": (),
+        "fields": ("industry_strong_rate", "pullback_from_5d_high_pct"),
+        "confirm_fields": ("body_pct", "close_vs_ma10_pct", "close_in_day_range_pct"),
+        "hard_confirm_fields": ("body_pct", "close_in_day_range_pct"),
+        "ranking_types": ("burst_priority", "repair_confirm", "factor_mix"),
+        "description": "强势回踩确认",
+    },
+    {
+        "template_id": "tight_base_reclaim",
+        "regimes": ("weak_rotation", "rotation"),
+        "regime_details": (),
+        "fields": ("volume_ratio_5d", "intraday_range_pct"),
+        "confirm_fields": ("ret_1d", "close_vs_ma10_pct", "close_in_day_range_pct"),
+        "hard_confirm_fields": ("ret_1d", "close_in_day_range_pct"),
+        "ranking_types": ("pullback_absorb", "low_extension"),
+        "description": "缩量平台回收",
+    },
+    {
+        "template_id": "sector_relative_pullback",
+        "regimes": ("rotation", "weak_rotation"),
+        "regime_details": ("weak_rotation_repair",),
+        "fields": ("pullback_from_5d_high_pct", "excess_body_pct"),
+        "confirm_fields": ("prev_ret_1d", "close_in_day_range_pct", "excess_ret_1d"),
+        "hard_confirm_fields": ("excess_ret_1d", "close_in_day_range_pct"),
+        "ranking_types": ("burst_priority", "repair_confirm", "factor_mix"),
+        "description": "板块强势中的个股分歧低吸",
+    },
+    {
+        "template_id": "unextended_rotation_start",
+        "regimes": ("rotation",),
+        "regime_details": (),
+        "fields": ("ret_10d", "close_vs_ma10_pct"),
+        "confirm_fields": ("prev_ret_1d", "ret_1d", "ma5_vs_ma10_pct"),
+        "hard_confirm_fields": ("ret_1d", "ma5_vs_ma10_pct"),
+        "ranking_types": ("momentum_first", "reclaim_bias"),
+        "description": "未加速补涨启动",
+    },
+    {
+        "template_id": "excess_body_repair",
+        "regimes": ("weak_rotation",),
+        "regime_details": ("weak_rotation_repair",),
+        "fields": ("excess_body_pct", "pullback_from_5d_high_pct"),
+        "confirm_fields": ("ret_1d", "body_pct", "close_in_day_range_pct"),
+        "hard_confirm_fields": ("ret_1d", "close_in_day_range_pct"),
+        "ranking_types": ("burst_priority", "repair_confirm", "pullback_absorb"),
+        "description": "超额实体修复",
+    },
+    {
+        "template_id": "volatility_contraction_reclaim",
+        "regimes": ("weak_rotation", "trend"),
+        "regime_details": (),
+        "fields": ("intraday_range_pct", "range_expansion_5d"),
+        "confirm_fields": ("ret_1d", "close_vs_ma10_pct", "body_pct", "close_in_day_range_pct"),
+        "hard_confirm_fields": ("ret_1d", "close_in_day_range_pct"),
+        "ranking_types": ("pullback_absorb", "reclaim_bias"),
+        "description": "波动收缩后弱转强",
+    },
+)
+
 
 def active_factor_specs(factor_fields: list[str] | None = None) -> tuple[dict, ...]:
     if not factor_fields:
         return FACTOR_SPECS
     field_set = set(factor_fields)
     return tuple(spec for spec in FACTOR_SPECS if spec["field"] in field_set)
+
+
+def combo_blueprints(
+    regime: str,
+    *,
+    regime_detail: str | None = None,
+) -> tuple[dict, ...]:
+    matched: list[dict] = []
+    for blueprint in COMBO_BLUEPRINTS:
+        if regime not in blueprint["regimes"]:
+            continue
+        detail_rules = blueprint.get("regime_details") or ()
+        if detail_rules and regime_detail not in detail_rules:
+            continue
+        matched.append(blueprint)
+    return tuple(matched)
+
+
+def _blueprint_for_fields(
+    regime: str,
+    regime_detail: str | None,
+    fields: list[str],
+) -> dict | None:
+    field_key = tuple(sorted(fields))
+    for blueprint in combo_blueprints(regime, regime_detail=regime_detail):
+        if tuple(sorted(blueprint["fields"])) == field_key:
+            return blueprint
+    return None
 
 
 def _field_weight(field: str) -> float:
@@ -202,6 +294,24 @@ def _build_score_weights(fields: list[str], ranking_type: str) -> list[dict]:
                 weight *= 1.2
             elif field in {"intraday_range_pct", "prev_ret_1d"}:
                 weight *= 0.9
+        elif ranking_type == "burst_priority":
+            if field in {
+                "excess_body_pct",
+                "excess_ret_1d",
+                "close_in_day_range_pct",
+                "body_pct",
+                "ret_1d",
+                "industry_strong_rate",
+            }:
+                weight *= 2.2
+            elif field in {
+                "pullback_from_5d_high_pct",
+                "ma5_vs_ma10_pct",
+                "close_vs_ma10_pct",
+            }:
+                weight *= 1.2
+            elif field in {"intraday_range_pct", "prev_ret_1d", "close_vs_ma5_pct"}:
+                weight *= 0.8
         weights.append({"field": field, "weight": round(weight, 4)})
     return weights
 
@@ -263,6 +373,27 @@ def _confirmation_conditions(
     fields: list[str],
     variant_type: str,
 ) -> list[dict]:
+    blueprint = _blueprint_for_fields(regime, regime_detail, fields)
+    if blueprint:
+        conditions: list[dict] = []
+        hard_fields = blueprint.get("hard_confirm_fields") or blueprint.get("confirm_fields", ())[:2]
+        for field in hard_fields:
+            if field == "body_pct":
+                conditions.append({"field": "body_pct", "op": "between", "min": 0.1, "max": 4.5})
+            elif field == "close_vs_ma10_pct":
+                conditions.append({"field": "close_vs_ma10_pct", "op": "between", "min": -1.5, "max": 4.5})
+            elif field == "close_in_day_range_pct":
+                conditions.append({"field": "close_in_day_range_pct", "op": "between", "min": 45.0, "max": 100.0})
+            elif field == "ret_1d":
+                conditions.append({"field": "ret_1d", "op": "between", "min": 0.2, "max": 4.2})
+            elif field == "prev_ret_1d":
+                conditions.append({"field": "prev_ret_1d", "op": "between", "min": -5.5, "max": 2.5})
+            elif field == "excess_ret_1d":
+                conditions.append({"field": "excess_ret_1d", "op": "between", "min": -0.5, "max": 5.0})
+            elif field == "ma5_vs_ma10_pct":
+                conditions.append({"field": "ma5_vs_ma10_pct", "op": "between", "min": -0.5, "max": 5.0})
+        if conditions:
+            return conditions
     if (
         regime == "weak_rotation"
         and regime_detail == "weak_rotation_drift"
@@ -578,6 +709,8 @@ def analyze_factor_combos(
             detail_frame = regime_frame.filter(pl.col("regime_detail") == regime_detail)
             top_buckets = _top_factor_buckets(factor_stats, regime, regime_detail=regime_detail, whitelist=whitelist)
             core_fields = _core_whitelist_fields(whitelist, regime, regime_detail=regime_detail, limit=2)
+            blueprints = combo_blueprints(regime, regime_detail=regime_detail)
+            blueprint_pairs = {tuple(sorted(item["fields"])) for item in blueprints}
             filtered_top_buckets: list[FactorBucketStat] = []
             seen_fields: set[str] = set()
             for item in top_buckets:
@@ -592,6 +725,10 @@ def analyze_factor_combos(
             for left, right in combinations(top_buckets, 2):
                 if left.field == right.field:
                     continue
+                pair_key = tuple(sorted((left.field, right.field)))
+                if blueprint_pairs:
+                    if pair_key not in blueprint_pairs:
+                        continue
                 if core_fields and left.field not in core_fields and right.field not in core_fields:
                     continue
                 combo_window = min(left.window_size, right.window_size)
@@ -660,8 +797,8 @@ def analyze_factor_combos(
                     ),
                     lift_vs_single=lift_vs_single,
                 )
-                pair_key = (regime, regime_detail, tuple(sorted(combo_result.fields)))
-                previous = best_results.get(pair_key)
+                best_key = (regime, regime_detail, tuple(sorted(combo_result.fields)))
+                previous = best_results.get(best_key)
                 if previous is None or (
                     combo_result.discovery_score,
                     combo_result.lift_vs_single,
@@ -671,7 +808,7 @@ def analyze_factor_combos(
                     previous.lift_vs_single,
                     previous.sample_count,
                 ):
-                    best_results[pair_key] = combo_result
+                    best_results[best_key] = combo_result
     results = list(best_results.values())
     results.sort(key=lambda item: (item.discovery_score, item.lift_vs_single, item.sample_count), reverse=True)
     return results[: settings.discovery_combo_top_n]
@@ -826,10 +963,12 @@ def _compute_replay_quality(
             passed=False,
         )
     topk_quality_score = round(
-        metrics["discovery_score"]
-        + max(min(metrics["avg_return_3d"], 5.0), -5.0) * 3.0
-        + max(min(metrics["avg_max_return_3d"], 8.0), 0.0) * 1.5
-        + max(min((4.5 + metrics["max_drawdown_3d"]) / 4.5, 1.0), 0.0) * 8.0,
+        metrics["discovery_score"] * 0.55
+        + max(min(metrics["avg_return_3d"], 5.0), -5.0) * 6.0
+        + max(min(metrics["avg_max_return_3d"], 8.0), 0.0) * 3.2
+        + max(min(metrics["hit_rate_3d"], 1.0), 0.0) * 10.0
+        + max(min(metrics["big_move_rate_3d"], 1.0), 0.0) * 16.0
+        + max(min((4.5 + metrics["max_drawdown_3d"]) / 4.5, 1.0), 0.0) * 3.0,
         2,
     )
     passed = (
@@ -856,6 +995,49 @@ def _compute_replay_quality(
     )
 
 
+def _compute_replay_quality_with_fallback(
+    *,
+    detail_filtered: pl.DataFrame,
+    regime_frame: pl.DataFrame,
+    hard_conditions: list[dict],
+    soft_conditions: list[dict],
+    match_threshold: float,
+    logic_id: str,
+    logic_name: str,
+    trade_days: int,
+    top_k: int,
+    fields: list[str],
+    ranking_type: str,
+) -> ReplayQualityResult:
+    primary = _compute_replay_quality(
+        detail_filtered,
+        logic_id=logic_id,
+        logic_name=logic_name,
+        trade_days=trade_days,
+        top_k=top_k,
+        fields=fields,
+        ranking_type=ranking_type,
+    )
+    if primary.sample_count >= settings.discovery_min_sample_count:
+        return primary
+    fallback = _apply_hard_conditions(regime_frame, hard_conditions)
+    fallback = fallback.with_columns(_soft_match_expr(soft_conditions).alias("_match_score")).filter(
+        pl.col("_match_score") >= match_threshold
+    )
+    secondary = _compute_replay_quality(
+        fallback,
+        logic_id=logic_id,
+        logic_name=logic_name,
+        trade_days=trade_days,
+        top_k=top_k,
+        fields=fields,
+        ranking_type=ranking_type,
+    )
+    if secondary.sample_count > primary.sample_count:
+        return secondary
+    return primary
+
+
 def analyze_rule_variants(
     panel: pl.DataFrame,
     *,
@@ -876,26 +1058,37 @@ def analyze_rule_variants(
         combos_by_bucket.setdefault((combo.regime, combo.regime_detail), []).append(combo)
 
     for (regime, regime_detail), regime_combos in combos_by_bucket.items():
-        regime_frame = panel.filter(
+        detail_frame = panel.filter(
             (pl.col("regime") == regime)
             & (pl.col("regime_detail") == regime_detail)
             & pl.col("next_3d_max_return").is_not_null()
         )
-        if regime_frame.is_empty():
+        if detail_frame.is_empty():
             continue
+        regime_frame = panel.filter((pl.col("regime") == regime) & pl.col("next_3d_max_return").is_not_null())
         for rank, combo in enumerate(regime_combos[: settings.discovery_candidate_limit], start=1):
             base_conditions = []
             for field in combo.fields:
                 factor = factor_index[(regime, regime_detail, combo.window_size, field)]
                 base_conditions.append({"field": field, "op": "between", "min": factor.min_value, "max": factor.max_value})
             variant_bundle: list[tuple[RuleVariantResult, DiscoveredLogicCandidate, list[ReplayQualityResult]]] = []
-            scoped = _window_frame(regime_frame, combo.window_size)
+            scoped = _window_frame(detail_frame, combo.window_size)
+            replay_scoped = _window_frame(regime_frame, combo.window_size)
+            blueprint = _blueprint_for_fields(regime, regime_detail, combo.fields)
             is_repair_combo = (
                 regime == "weak_rotation"
                 and regime_detail == "weak_rotation_repair"
                 and {"pullback_from_5d_high_pct", "excess_body_pct"}.issubset(combo.fields)
             )
-            if is_repair_combo:
+            if blueprint:
+                variant_configs = (
+                    ("baseline", 0.0),
+                    ("narrow", 0.0),
+                    ("tighten_lower_soft", 0.0),
+                    ("wide", 0.0),
+                )
+                ranking_types = tuple(blueprint.get("ranking_types", ("factor_mix",)))
+            elif is_repair_combo:
                 variant_configs = (
                     ("baseline", 0.0),
                     ("narrow", 0.0),
@@ -939,6 +1132,9 @@ def analyze_rule_variants(
                 filtered = filtered.with_columns(_soft_match_expr(conditions).alias("_match_score")).filter(
                     pl.col("_match_score") >= match_threshold
                 )
+                coverage_floor = max(settings.discovery_min_sample_count, int(combo.sample_count * 0.3))
+                if filtered.height < coverage_floor:
+                    continue
                 metrics = _factor_metrics(filtered)
                 if metrics is None:
                     continue
@@ -957,8 +1153,12 @@ def analyze_rule_variants(
                         rank,
                     )
                     quality_rows = [
-                        _compute_replay_quality(
-                            filtered,
+                        _compute_replay_quality_with_fallback(
+                            detail_filtered=filtered,
+                            regime_frame=replay_scoped,
+                            hard_conditions=hard_conditions,
+                            soft_conditions=conditions,
+                            match_threshold=match_threshold,
                             logic_id=spec.logic_id,
                             logic_name=spec.name,
                             trade_days=combo.window_size,
@@ -1011,6 +1211,8 @@ def analyze_rule_variants(
                         replay_quality_passed=all(item.passed for item in quality_rows),
                         spec_json=json.dumps(spec.model_dump(mode="json"), ensure_ascii=False),
                     )
+                    top5 = next((item for item in quality_rows if item.top_k == 5), None)
+                    candidate.replay_quality_passed = bool(top5 and top5.passed)
                     candidate.approved_for_validation = (
                         metrics["sample_count"] >= settings.discovery_min_sample_count
                         and (
